@@ -18,11 +18,13 @@ from app.ludo.board import (
     HOME_COLUMN_LEN,
     MAIN_TRACK_LEN,
     RING_CELLS,
+    SAFE_OWNER,
     SAFE_SQUARES,
     START_OFFSET,
     Color,
     absolute_square,
     is_safe,
+    safe_owner,
 )
 from app.ludo.state import GameState, Move, PlayerState, Phase
 from app.ludo.rules import (
@@ -40,11 +42,13 @@ __all__ = [
     "HOME_COLUMN_LEN",
     "MAIN_TRACK_LEN",
     "RING_CELLS",
+    "SAFE_OWNER",
     "SAFE_SQUARES",
     "START_OFFSET",
     "Color",
     "absolute_square",
     "is_safe",
+    "safe_owner",
     "GameState",
     "Move",
     "PlayerState",

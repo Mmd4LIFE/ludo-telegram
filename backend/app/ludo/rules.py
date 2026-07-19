@@ -30,7 +30,7 @@ from app.ludo.board import (
     TOKENS_PER_PLAYER,
     Color,
     absolute_square,
-    is_safe,
+    safe_owner,
 )
 from app.ludo.state import GameState, Move, Phase, PlayerState
 
@@ -131,25 +131,29 @@ def _build_move(state: GameState, idx: int, src: int, dst: int) -> Move:
 def _captures_at(state: GameState, mover: Color, dst: int) -> list[tuple[int, int]]:
     """Opponent (seat, token) pairs captured by a mover landing on progress ``dst``.
 
-    No capture when landing off the ring (home column) or on a safe square, and never
-    when the destination square holds two or more opponent tokens of the same colour
-    (a blockade cannot be captured — it is bounced, but we model that as "no capture"
-    and still allow the landing for simplicity; see ROADMAP for full blockade rules).
+    No capture when landing off the ring (home column). A defender is protected only when
+    it sits on a safe square owned by *its own* colour — so you capture intruders on your
+    own star but cannot capture the owner sitting on theirs. A blockade of two or more
+    same-colour tokens is never captured (bounced; full blockade rules are a ROADMAP item).
     """
     dst_sq = absolute_square(mover, dst)
-    if dst_sq is None or is_safe(dst_sq):
+    if dst_sq is None:
         return []
+    owner = safe_owner(dst_sq)  # colour this square protects, or None
 
-    hits: dict[int, list[int]] = {}
+    hits: dict[int, tuple[list[int], Color]] = {}
     for seat, p in enumerate(state.players):
         if p.color == mover:
             continue
         for tok_idx, prog in enumerate(p.tokens):
             if absolute_square(p.color, prog) == dst_sq:
-                hits.setdefault(seat, []).append(tok_idx)
+                hits.setdefault(seat, ([], p.color))[0].append(tok_idx)
 
     captured: list[tuple[int, int]] = []
-    for seat, toks in hits.items():
+    for seat, (toks, color) in hits.items():
+        if owner == color:
+            # the square's own colour is safe here; everyone else is exposed
+            continue
         if len(toks) >= 2:
             # a blockade of >=2 same-colour tokens is not captured
             continue

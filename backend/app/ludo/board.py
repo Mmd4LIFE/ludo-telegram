@@ -66,6 +66,21 @@ SAFE_SQUARES: frozenset[int] = frozenset(
     | {(off + 8) % MAIN_TRACK_LEN for off in START_OFFSET.values()}
 )
 
+# Which colour *owns* each safe square (its start + the star 8 steps on). A token is
+# protected ONLY on a safe square owned by its own colour — on every other square (safe or
+# not) it can be captured. So each star is a private sanctuary for one colour, not a
+# shared one: landing on your own star captures intruders, but you cannot capture the
+# owner sitting on theirs.
+SAFE_OWNER: dict[int, Color] = {}
+for _color, _off in START_OFFSET.items():
+    SAFE_OWNER[_off] = _color
+    SAFE_OWNER[(_off + 8) % MAIN_TRACK_LEN] = _color
+
+
+def safe_owner(square: int) -> Color | None:
+    """The colour a safe square protects, or ``None`` if it is not a safe square."""
+    return SAFE_OWNER.get(square)
+
 
 def absolute_square(color: Color, progress: int) -> int | None:
     """Absolute ring cell (0..51) for a token, or ``None`` if it is off the ring.

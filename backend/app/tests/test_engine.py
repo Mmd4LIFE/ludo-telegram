@@ -104,16 +104,26 @@ def test_capture_sends_home_and_grants_turn() -> None:
     _check("capture grants an extra turn", res.extra_turn)
 
 
-def test_safe_square_blocks_capture() -> None:
+def test_safe_square_protects_owner_only() -> None:
+    # A star protects ONLY its owner colour. Owner sitting on their own star is safe…
     s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
-    # YELLOW sits on absolute 8 (a star / safe square).
-    # YELLOW progress p -> (26 + p) % 52 == 8 => p == 34.
-    _check("setup: yellow on safe square 8", absolute_square(Color.YELLOW, 34) == 8 and is_safe(8))
-    s.players[1].tokens[0] = 34
-    s.players[0].tokens[0] = 5    # RED abs 5
-    register_roll(s, 3)           # RED -> abs 8
+    # YELLOW on its OWN start star abs 26 (progress 0 -> abs 26).
+    s.players[1].tokens[0] = 0
+    s.players[0].tokens[0] = 23   # RED abs 23
+    register_roll(s, 3)           # RED -> abs 26 (yellow's own star)
+    _check("setup: red lands on yellow's own star", absolute_square(Color.RED, 26) == 26)
     moves = [m for m in legal_moves(s) if m.token_index == 0]
-    _check("landing on a safe square captures nothing", moves and moves[0].captures == ())
+    _check("owner is safe on its own star", moves and moves[0].captures == ())
+
+    # …but a NON-owner sitting on someone else's star is captured.
+    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+    # YELLOW on abs 8 — that star belongs to RED, so yellow is exposed there.
+    _check("setup: abs 8 is a star", is_safe(8))
+    s.players[1].tokens[0] = 34   # YELLOW abs 8
+    s.players[0].tokens[0] = 5    # RED abs 5
+    register_roll(s, 3)           # RED -> abs 8 (red's own star)
+    moves = [m for m in legal_moves(s) if m.token_index == 0]
+    _check("intruder on your star is captured", moves and moves[0].captures == ((1, 0),))
 
 
 # --- home / exact landing ---------------------------------------------------
@@ -178,7 +188,7 @@ def run_all() -> None:
         test_extra_turn_on_six,
         test_triple_six_forfeits,
         test_capture_sends_home_and_grants_turn,
-        test_safe_square_blocks_capture,
+        test_safe_square_protects_owner_only,
         test_must_land_home_exactly,
         test_fuzz_games,
     ):

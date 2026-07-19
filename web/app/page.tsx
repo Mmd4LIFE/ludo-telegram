@@ -17,6 +17,8 @@ import {
   Bot,
   Plus,
   Coins,
+  Home as HomeIcon,
+  AlertTriangle,
 } from "lucide-react";
 import { api, authenticate, MatchSummary, Profile } from "@/lib/api";
 import {
@@ -150,7 +152,7 @@ export default function Home() {
     return (
       <Shell>
         <Card className="text-center">
-          <div className="text-4xl">⚠️</div>
+          <AlertTriangle className="mx-auto size-10 text-red" />
           <p className="mt-2 text-sm text-muted-foreground break-words">{error}</p>
           <Button className="mt-4 w-full" onClick={() => location.reload()}>
             Reload
@@ -211,7 +213,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 function Splash({ label = "Loading…" }: { label?: string }) {
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center gap-4">
-      <div className="text-5xl lb-pop">🎲</div>
+      <Dice5 className="size-12 text-primary lb-pop" />
       <div className="text-lg font-extrabold tracking-widest text-primary">LUDO BOARD</div>
       <Loader2 className="size-5 text-muted-foreground lb-spin" />
       <div className="text-xs text-muted-foreground">{label}</div>
@@ -393,7 +395,7 @@ function WaitingRoom({
 
   const share = () => {
     haptic("light");
-    shareRoom(profile.bot_username, room.code, "Join my Ludo game! 🎲");
+    shareRoom(profile.bot_username, room.code, "Join my Ludo game!");
   };
   const copy = async () => {
     try {
@@ -518,6 +520,38 @@ function RollingDie({ die, turn }: { die: number | null; turn: number }) {
   );
 }
 
+function RollButton({
+  active,
+  pct,
+  seconds,
+  onRoll,
+}: {
+  active: boolean;
+  pct: number;
+  seconds: number;
+  onRoll: () => void;
+}) {
+  return (
+    <button
+      disabled={!active}
+      onClick={onRoll}
+      className="relative h-14 flex-1 overflow-hidden rounded-2xl bg-secondary ring-1 ring-white/10 transition active:translate-y-px disabled:opacity-55"
+    >
+      {/* gold fill drains left→right as the clock runs out */}
+      {active && (
+        <div
+          className="absolute inset-y-0 left-0 bg-primary transition-[width] duration-200 ease-linear"
+          style={{ width: `${pct}%` }}
+        />
+      )}
+      <span className="relative z-10 flex h-full w-full items-center justify-center gap-2 font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)]">
+        <Dice5 className="size-5" />
+        {active && seconds <= 5 ? `Roll · ${Math.ceil(seconds)}s` : "Roll"}
+      </span>
+    </button>
+  );
+}
+
 function LiveMatch({
   code,
   state,
@@ -562,7 +596,6 @@ function LiveMatch({
     remaining = Math.max(0, clock.deadline - serverNow);
   }
   const pct = clock?.deadline ? Math.max(0, Math.min(100, (remaining / clock.turnSeconds) * 100)) : 0;
-  const low = remaining <= 5;
 
   return (
     <Shell>
@@ -594,42 +627,34 @@ function LiveMatch({
               <div className="mt-1 text-[10px] font-bold text-muted-foreground">
                 {isMe ? "YOU" : seatUser[String(seat)] ? "P" + seat : "BOT"}
               </div>
-              <div className="text-[11px] font-bold tabular-nums">🏠 {home}/4</div>
+              <div className="flex items-center justify-center gap-1 text-[11px] font-bold tabular-nums">
+                <HomeIcon className="size-3 text-muted-foreground" /> {home}/4
+              </div>
             </div>
           );
         })}
       </div>
 
-      {/* turn banner + countdown */}
+      {/* turn banner — fixed height so the board never shifts */}
       <div
-        className="overflow-hidden rounded-2xl ring-1 ring-white/10"
+        className="rounded-2xl py-2.5 text-center text-sm font-bold ring-1 ring-white/10"
         style={{ background: finished ? "#161d2c" : `${COLOR_HEX[currentColor]}22` }}
       >
-        <div className="py-2.5 text-center text-sm font-bold">
-          {finished ? (
-            <span className="inline-flex items-center gap-2">
-              <Trophy className="size-4 text-primary" /> Winner: seat {state.ranking[0]}
-            </span>
-          ) : noMoves ? (
-            `No moves for ${currentColor} — passing…`
-          ) : myTurn ? (
-            state.phase === "roll" ? (
-              "Your turn — roll the die!"
-            ) : (
-              "Your turn — tap a glowing token"
-            )
+        {finished ? (
+          <span className="inline-flex items-center gap-2">
+            <Trophy className="size-4 text-primary" /> Winner: seat {state.ranking[0]}
+          </span>
+        ) : noMoves ? (
+          `No moves for ${currentColor} — passing…`
+        ) : myTurn ? (
+          state.phase === "roll" ? (
+            "Your turn — roll the die!"
           ) : (
-            `${currentColor}'s turn…`
-          )}
-        </div>
-        {clock?.deadline && !finished ? (
-          <div className="h-1 w-full bg-black/20">
-            <div
-              className="h-full transition-[width] duration-200 ease-linear"
-              style={{ width: `${pct}%`, background: low ? "#e5484d" : COLOR_HEX[currentColor] }}
-            />
-          </div>
-        ) : null}
+            "Your turn — tap a glowing token"
+          )
+        ) : (
+          `${currentColor}'s turn…`
+        )}
       </div>
 
       <Card className="p-2">
@@ -645,21 +670,18 @@ function LiveMatch({
         />
       </Card>
 
-      {/* dice + roll */}
+      {/* dice + roll (the button's gold fill drains as your turn clock runs out) */}
       <div className="flex items-center justify-between gap-3">
         <RollingDie die={state.die} turn={state.turn} />
-        <Button
-          size="lg"
-          className={cn("flex-1", myTurn && state.phase === "roll" && !finished && "animate-pulse")}
-          disabled={!myTurn || state.phase !== "roll" || finished}
-          onClick={() => {
+        <RollButton
+          active={myTurn && state.phase === "roll" && !finished}
+          pct={clock?.deadline ? pct : 100}
+          seconds={remaining}
+          onRoll={() => {
             haptic("medium");
             sock?.roll();
           }}
-        >
-          <Dice5 className="size-5" />
-          {myTurn && state.phase === "roll" ? (low ? `Roll! ${Math.ceil(remaining)}s` : "Roll") : "Roll"}
-        </Button>
+        />
       </div>
 
       {finished && (

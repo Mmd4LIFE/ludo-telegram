@@ -6,7 +6,7 @@
 // Engine progress model: -1 BASE · 0..50 shared track (abs = (START_OFFSET+prog)%52) ·
 // 51..55 private home column · 56 HOME (centre). Colliding tokens share an absolute cell
 // so captures read correctly. The whole board is rotated k·90° about its centre so the
-// viewer's yard is at the bottom; only the ★ glyphs are counter-rotated to stay upright.
+// viewer's yard is at the bottom; safe-square stars are SVG polygons kept upright.
 
 import { GameState, LegalMove } from "@/lib/ws";
 
@@ -68,6 +68,17 @@ const START_ABS = new Set(Object.values(START_OFFSET));
 
 const px = (c: number, r: number): [number, number] => [(c + 0.5) * CELL, (r + 0.5) * CELL];
 
+// five-point star as an SVG polygon (no emoji / font glyphs)
+function starPts(cx: number, cy: number, R: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rad = i % 2 === 0 ? R : R * 0.46;
+    pts.push(`${cx + rad * Math.cos(ang)},${cy + rad * Math.sin(ang)}`);
+  }
+  return pts.join(" ");
+}
+
 function tokenCell(color: string, prog: number, ti: number): [number, number] {
   if (prog < 0) return YARD[color].slots[ti];
   if (prog <= 50) return TRACK[(START_OFFSET[color] + prog) % 52];
@@ -113,7 +124,7 @@ export default function Board({
   const dests = myTurn
     ? legal.map((m) => {
         const [c, r] = tokenCell(moverColor, m.dst, m.token_index);
-        return { c, r, capture: m.captures.length > 0, home: m.reaches_home };
+        return { c, r, capture: m.captures.length > 0, dst: m.dst };
       })
     : [];
 
@@ -158,23 +169,22 @@ export default function Board({
           ))
         )}
 
-        {/* safe stars (counter-rotated so the glyph stays upright) */}
+        {/* safe stars — drawn as SVG polygons (no emoji), upright regardless of rotation */}
         {[...SAFE].map((abs) => {
           const [c, r] = TRACK[abs];
           const [x, y] = px(c, r);
           return (
-            <text
+            <polygon
               key={abs}
-              x={x} y={y + CELL * 0.14}
-              textAnchor="middle" fontSize={CELL * 0.5} fill="#9aa1ad"
+              points={starPts(x, y, CELL * 0.28)}
+              fill="#aeb4c0"
               transform={`rotate(${-rot} ${x} ${y})`}
-            >
-              ★
-            </text>
+            />
           );
         })}
 
-        {/* centre — pinwheel home, apexes meeting exactly at board centre */}
+        {/* centre home — four triangles meeting exactly at the board centre, with a
+            clean central disc so the finish reads unmistakably as the middle */}
         <rect x={6 * CELL} y={6 * CELL} width={3 * CELL} height={3 * CELL} fill="#ffffff" />
         {(() => {
           const L = 6 * CELL, T = 6 * CELL, R = 9 * CELL, B = 9 * CELL, cx = MID, cy = MID;
@@ -184,23 +194,24 @@ export default function Board({
             ["BLUE", `${R},${B} ${L},${B} ${cx},${cy}`],
             ["RED", `${L},${B} ${L},${T} ${cx},${cy}`],
           ];
-          return tris.map(([col, pts]) => <polygon key={col} points={pts} fill={COLORS[col]} />);
+          return tris.map(([col, pts]) => (
+            <polygon key={col} points={pts} fill={COLORS[col]} stroke="#ffffff" strokeWidth={1} />
+          ));
         })()}
-        {/* centred home emblem so the finish reads clearly as the middle */}
-        <circle cx={MID} cy={MID} r={CELL * 0.42} fill="#ffffff" opacity={0.9} />
-        <circle cx={MID} cy={MID} r={CELL * 0.42} fill="none" stroke="#c8ccd4" strokeWidth={1.5} />
-        <text
-          x={MID} y={MID + CELL * 0.16}
-          textAnchor="middle" fontSize={CELL * 0.42}
-          transform={`rotate(${-rot} ${MID} ${MID})`}
-        >
-          🏠
-        </text>
+        <circle cx={MID} cy={MID} r={CELL * 0.5} fill="#ffffff" />
+        <circle cx={MID} cy={MID} r={CELL * 0.5} fill="none" stroke="#c8ccd4" strokeWidth={1.5} />
+        <circle cx={MID} cy={MID} r={CELL * 0.18} fill="#c8ccd4" />
 
-        {/* move-destination markers */}
+        {/* move-destination markers (white inside the same-coloured home column) */}
         {dests.map((d, i) => {
           const [x, y] = px(d.c, d.r);
-          const col = d.capture ? "#e5484d" : COLORS[moverColor];
+          const col = d.capture
+            ? "#e5484d"
+            : d.dst >= 56
+              ? "#0e1320"
+              : d.dst >= 51
+                ? "#ffffff"
+                : COLORS[moverColor];
           return (
             <g key={`d-${i}`} pointerEvents="none">
               <circle cx={x} cy={y} r={CELL * 0.4} fill="none" stroke={col} strokeWidth={2.5} strokeDasharray="4 3">
