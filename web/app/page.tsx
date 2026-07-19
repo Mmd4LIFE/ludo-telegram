@@ -41,6 +41,7 @@ const COLOR_HEX: Record<string, string> = {
 };
 
 type Room = { code: string; host: boolean };
+type Clock = { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
 
 export default function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -52,6 +53,7 @@ export default function Home() {
   const [state, setState] = useState<GameState | null>(null);
   const [legal, setLegal] = useState<LegalMove[]>([]);
   const [seatUser, setSeatUser] = useState<Record<string, number | null>>({});
+  const [clock, setClock] = useState<Clock | null>(null);
   const sockRef = useRef<MatchSocket | null>(null);
 
   // ---- live match socket ----
@@ -65,6 +67,12 @@ export default function Home() {
         setState(p.state);
         setLegal(p.legal_moves);
         setSeatUser(p.seat_user);
+        setClock({
+          deadline: p.deadline,
+          now: p.now,
+          recvAt: Date.now() / 1000,
+          turnSeconds: p.turn_seconds,
+        });
       }
     });
     sock.connect();
@@ -161,6 +169,7 @@ export default function Home() {
         legal={legal}
         profile={profile}
         seatUser={seatUser}
+        clock={clock}
         sock={sockRef.current}
         onLeave={leaveMatch}
       />
@@ -473,12 +482,49 @@ function Pips({ n }: { n: number | null }) {
   );
 }
 
+function RollingDie({ die, turn }: { die: number | null; turn: number }) {
+  const [shown, setShown] = useState<number | null>(die);
+  const [spin, setSpin] = useState(false);
+  useEffect(() => {
+    if (die == null) {
+      setShown(null);
+      return;
+    }
+    setSpin(true);
+    let i = 0;
+    const iv = setInterval(() => {
+      i += 1;
+      if (i >= 6) {
+        clearInterval(iv);
+        setShown(die);
+        setSpin(false);
+        haptic("rigid");
+      } else {
+        setShown(1 + Math.floor(Math.random() * 6));
+      }
+    }, 65);
+    return () => clearInterval(iv);
+    // re-run the tumble whenever a fresh die lands (keyed also by turn)
+  }, [die, turn]);
+  return (
+    <div
+      className={cn(
+        "grid size-14 place-items-center rounded-2xl bg-white shadow-lg transition-transform",
+        spin && "lb-pop"
+      )}
+    >
+      <Pips n={shown} />
+    </div>
+  );
+}
+
 function LiveMatch({
   code,
   state,
   legal,
   profile,
   seatUser,
+  clock,
   sock,
   onLeave,
 }: {
@@ -487,6 +533,7 @@ function LiveMatch({
   legal: LegalMove[];
   profile: Profile;
   seatUser: Record<string, number | null>;
+  clock: Clock | null;
   sock: MatchSocket | null;
   onLeave: () => void;
 }) {
@@ -500,6 +547,22 @@ function LiveMatch({
   const myTurn = mySeat !== null && state.current === mySeat;
   const finished = state.phase === "finished";
   const currentColor = state.players[state.current]?.color ?? "";
+  const noMoves = !finished && state.phase === "move" && legal.length === 0;
+
+  // ---- turn countdown (server deadline, corrected for clock skew) ----
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!clock?.deadline) return;
+    const id = setInterval(() => force((n) => n + 1), 200);
+    return () => clearInterval(id);
+  }, [clock?.deadline]);
+  let remaining = 0;
+  if (clock?.deadline) {
+    const serverNow = clock.now + (Date.now() / 1000 - clock.recvAt);
+    remaining = Math.max(0, clock.deadline - serverNow);
+  }
+  const pct = clock?.deadline ? Math.max(0, Math.min(100, (remaining / clock.turnSeconds) * 100)) : 0;
+  const low = remaining <= 5;
 
   return (
     <Shell>
@@ -523,14 +586,11 @@ function LiveMatch({
               key={seat}
               className={cn(
                 "flex-1 rounded-2xl bg-card px-2 py-2 text-center ring-1 transition",
-                active ? "ring-2" : "ring-white/10"
+                active ? "ring-2 scale-[1.03]" : "ring-white/10"
               )}
               style={active ? { boxShadow: `0 0 0 2px ${COLOR_HEX[p.color]}` } : undefined}
             >
-              <div
-                className="mx-auto size-4 rounded-full"
-                style={{ background: COLOR_HEX[p.color] }}
-              />
+              <div className="mx-auto size-4 rounded-full" style={{ background: COLOR_HEX[p.color] }} />
               <div className="mt-1 text-[10px] font-bold text-muted-foreground">
                 {isMe ? "YOU" : seatUser[String(seat)] ? "P" + seat : "BOT"}
               </div>
@@ -540,24 +600,36 @@ function LiveMatch({
         })}
       </div>
 
-      {/* turn banner */}
+      {/* turn banner + countdown */}
       <div
-        className="rounded-2xl py-2.5 text-center text-sm font-bold ring-1 ring-white/10"
+        className="overflow-hidden rounded-2xl ring-1 ring-white/10"
         style={{ background: finished ? "#161d2c" : `${COLOR_HEX[currentColor]}22` }}
       >
-        {finished ? (
-          <span className="inline-flex items-center gap-2">
-            <Trophy className="size-4 text-primary" /> Winner: seat {state.ranking[0]}
-          </span>
-        ) : myTurn ? (
-          state.phase === "roll" ? (
-            "Your turn — roll the die!"
+        <div className="py-2.5 text-center text-sm font-bold">
+          {finished ? (
+            <span className="inline-flex items-center gap-2">
+              <Trophy className="size-4 text-primary" /> Winner: seat {state.ranking[0]}
+            </span>
+          ) : noMoves ? (
+            `No moves for ${currentColor} — passing…`
+          ) : myTurn ? (
+            state.phase === "roll" ? (
+              "Your turn — roll the die!"
+            ) : (
+              "Your turn — tap a glowing token"
+            )
           ) : (
-            "Your turn — pick a token"
-          )
-        ) : (
-          `Waiting for ${currentColor}…`
-        )}
+            `${currentColor}'s turn…`
+          )}
+        </div>
+        {clock?.deadline && !finished ? (
+          <div className="h-1 w-full bg-black/20">
+            <div
+              className="h-full transition-[width] duration-200 ease-linear"
+              style={{ width: `${pct}%`, background: low ? "#e5484d" : COLOR_HEX[currentColor] }}
+            />
+          </div>
+        ) : null}
       </div>
 
       <Card className="p-2">
@@ -574,19 +646,18 @@ function LiveMatch({
 
       {/* dice + roll */}
       <div className="flex items-center justify-between gap-3">
-        <div className="grid size-14 place-items-center rounded-2xl bg-white shadow-lg">
-          <Pips n={state.die} />
-        </div>
+        <RollingDie die={state.die} turn={state.turn} />
         <Button
           size="lg"
-          className="flex-1"
+          className={cn("flex-1", myTurn && state.phase === "roll" && !finished && "animate-pulse")}
           disabled={!myTurn || state.phase !== "roll" || finished}
           onClick={() => {
             haptic("medium");
             sock?.roll();
           }}
         >
-          <Dice5 className="size-5" /> Roll
+          <Dice5 className="size-5" />
+          {myTurn && state.phase === "roll" ? (low ? `Roll! ${Math.ceil(remaining)}s` : "Roll") : "Roll"}
         </Button>
       </div>
 

@@ -41,9 +41,12 @@ class Settings(BaseSettings):
     ROOM_IDLE_CLOSE_HOURS: float = 1.0
 
     # Gameplay
-    TURN_TIMEOUT_SECONDS: int = 25          # auto-move if a player stalls
+    TURN_TIMEOUT_SECONDS: int = 20          # a player has this long to act, else auto-play
     BOT_THINK_MIN: float = 1.2
-    BOT_THINK_MAX: float = 3.0
+    BOT_THINK_MAX: float = 2.4
+    ROLL_REVEAL_SECONDS: float = 1.0        # hold on the rolled die so everyone sees it
+    NO_MOVE_SECONDS: float = 1.2            # pause to show "no legal moves" before passing
+    MOVE_SETTLE_SECONDS: float = 0.45       # let a token's glide finish before the next act
     IDLE_SEAT_GRACE_SECONDS: int = 90       # keep a seat this long after disconnect
     JANITOR_INTERVAL_SECONDS: int = 30
 

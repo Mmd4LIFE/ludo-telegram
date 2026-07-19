@@ -33,6 +33,9 @@ export interface StatePayload {
   state: GameState;
   seat_user: Record<string, number | null>;
   legal_moves: LegalMove[];
+  deadline: number | null; // unix seconds the current player must act by (or null)
+  now: number; // server unix seconds at send time (for clock-skew correction)
+  turn_seconds: number; // full turn length, for the countdown bar
 }
 
 type Handler = (msg: StatePayload | { type: string; [k: string]: unknown }) => void;

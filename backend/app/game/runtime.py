@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 
 from app.config import settings
 from app.database import SessionLocal
@@ -70,6 +71,9 @@ class MatchRuntime:
         self._queue: asyncio.Queue[tuple[int, dict]] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._started = False
+        # wall-clock deadline for the current human action (unix seconds) — the client
+        # renders a countdown against it; None when it's a bot's turn / no clock.
+        self._deadline: float | None = None
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -137,25 +141,34 @@ class MatchRuntime:
 
         if self.state.phase is Phase.ROLL:
             if not bot_seat:
+                self._deadline = time.time() + settings.TURN_TIMEOUT_SECONDS
+                await self._broadcast()  # push the countdown to the client
                 got = await self._drain_for(seat, "roll", settings.TURN_TIMEOUT_SECONDS)
+                self._deadline = None
                 if got is None:
                     logger.info("seat %s timed out on roll (%s)", seat, self.code)
             else:
                 await self._think()
             register_roll(self.state, roll_die(self._rng))
             await self._broadcast()
+            await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)  # hold on the die face
             return
 
         if self.state.phase is Phase.MOVE:
             moves = legal_moves(self.state)
             if not moves:
+                await self._broadcast()  # show the die + "no moves" state
+                await asyncio.sleep(settings.NO_MOVE_SECONDS)
                 apply_move(self.state, None)
                 await self._broadcast()
                 return
 
             chosen = None
             if not bot_seat:
+                self._deadline = time.time() + settings.TURN_TIMEOUT_SECONDS
+                await self._broadcast()  # push the countdown to the client
                 got = await self._drain_for(seat, "move", settings.TURN_TIMEOUT_SECONDS)
+                self._deadline = None
                 if got is not None:
                     idx = got.get("token_index")
                     chosen = next((m for m in moves if m.token_index == idx), None)
@@ -165,6 +178,7 @@ class MatchRuntime:
                 chosen = choose_move(self.state, moves, self._rng)
             apply_move(self.state, chosen)
             await self._broadcast()
+            await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
     async def _think(self) -> None:
         await asyncio.sleep(self._rng.uniform(settings.BOT_THINK_MIN, settings.BOT_THINK_MAX))
@@ -177,6 +191,10 @@ class MatchRuntime:
             "state": self.state.to_dict(),
             "seat_user": {str(k): v for k, v in self.seat_user.items()},
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
+            # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
+            "deadline": self._deadline,
+            "now": time.time(),
+            "turn_seconds": settings.TURN_TIMEOUT_SECONDS,
         }
 
     async def _broadcast(self) -> None:
