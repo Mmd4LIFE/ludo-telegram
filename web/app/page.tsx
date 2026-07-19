@@ -4,7 +4,7 @@
 // Views: auth splash → lobby → waiting room (with native Telegram invite) → live match.
 // The board renders authoritative server state over a per-match WebSocket.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Component, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
   Dice5,
   Users,
@@ -44,7 +44,43 @@ const COLOR_HEX: Record<string, string> = {
 type Room = { code: string; host: boolean };
 type Clock = { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
 
-export default function Home() {
+// Catch any render error so a single bad frame can never take down the whole webview
+// (which Telegram surfaces as "This page couldn't load").
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <Shell>
+          <Card className="text-center">
+            <AlertTriangle className="mx-auto size-10 text-red" />
+            <div className="mt-2 font-bold">Something glitched</div>
+            <p className="mt-1 text-sm text-muted-foreground break-words">
+              {String(this.state.error.message || this.state.error)}
+            </p>
+            <Button className="mt-4 w-full" onClick={() => location.reload()}>
+              Reload
+            </Button>
+          </Card>
+        </Shell>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function Page() {
+  return (
+    <ErrorBoundary>
+      <Home />
+    </ErrorBoundary>
+  );
+}
+
+function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -551,15 +587,27 @@ function RollingDie({ die, turn }: { die: number | null; turn: number }) {
 
 function RollButton({
   active,
-  pct,
-  seconds,
+  clock,
   onRoll,
 }: {
   active: boolean;
-  pct: number;
-  seconds: number;
+  clock: Clock | null;
   onRoll: () => void;
 }) {
+  // Own the countdown here so only THIS button re-renders each tick — never the board.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!active || !clock?.deadline) return;
+    const id = setInterval(() => tick((n) => n + 1), 250);
+    return () => clearInterval(id);
+  }, [active, clock?.deadline, clock?.recvAt]);
+  let pct = 100;
+  let seconds = 0;
+  if (active && clock?.deadline) {
+    const serverNow = clock.now + (Date.now() / 1000 - clock.recvAt);
+    seconds = Math.max(0, clock.deadline - serverNow);
+    pct = Math.max(0, Math.min(100, (seconds / clock.turnSeconds) * 100));
+  }
   return (
     <button
       disabled={!active}
@@ -614,20 +662,6 @@ function LiveMatch({
   const finished = state.phase === "finished";
   const currentColor = state.players[state.current]?.color ?? "";
   const noMoves = !finished && state.phase === "move" && legal.length === 0;
-
-  // ---- turn countdown (server deadline, corrected for clock skew) ----
-  const [, force] = useState(0);
-  useEffect(() => {
-    if (!clock?.deadline) return;
-    const id = setInterval(() => force((n) => n + 1), 200);
-    return () => clearInterval(id);
-  }, [clock?.deadline]);
-  let remaining = 0;
-  if (clock?.deadline) {
-    const serverNow = clock.now + (Date.now() / 1000 - clock.recvAt);
-    remaining = Math.max(0, clock.deadline - serverNow);
-  }
-  const pct = clock?.deadline ? Math.max(0, Math.min(100, (remaining / clock.turnSeconds) * 100)) : 0;
 
   const nameFor = (seat: number) =>
     seat === mySeat ? "You" : seatNames[String(seat)] || (seatUser[String(seat)] ? "Player" : "Bot");
@@ -745,8 +779,7 @@ function LiveMatch({
           <RollingDie die={state.die} turn={state.turn} />
           <RollButton
             active={myTurn && state.phase === "roll"}
-            pct={clock?.deadline ? pct : 100}
-            seconds={remaining}
+            clock={clock}
             onRoll={() => {
               haptic("medium");
               sock?.roll();
