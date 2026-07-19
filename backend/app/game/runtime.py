@@ -58,9 +58,11 @@ class MatchRuntime:
         # seat index -> user_id (None = house bot)
         self.seat_user: dict[int, int | None] = {}
         self.seat_is_bot: dict[int, bool] = {}
+        self.seat_names: dict[int, str] = {}  # seat -> display name (filled on connect)
         for s in match.seats:
             self.seat_user[s.seat_index] = s.user_id
             self.seat_is_bot[s.seat_index] = s.is_bot
+            self.seat_names[s.seat_index] = "Bot" if s.is_bot else "Player"
 
         self.state: GameState = (
             GameState.from_dict(match.state)
@@ -190,6 +192,7 @@ class MatchRuntime:
             "code": self.code,
             "state": self.state.to_dict(),
             "seat_user": {str(k): v for k, v in self.seat_user.items()},
+            "seat_names": {str(k): v for k, v in self.seat_names.items()},
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
             # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
             "deadline": self._deadline,

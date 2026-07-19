@@ -61,6 +61,14 @@ class CreateMatchRequest(BaseModel):
     fill_with_bots: bool = False  # start immediately against house bots
 
 
+class SeatInfo(BaseModel):
+    seat_index: int
+    color: str
+    name: str            # display name (friends-only detail stays server-side)
+    is_bot: bool
+    user_id: int | None = None
+
+
 class MatchSummary(BaseModel):
     code: str
     status: str
@@ -68,6 +76,7 @@ class MatchSummary(BaseModel):
     seated: int
     is_public: bool
     entry_fee: int
+    seats: list[SeatInfo] = []
 
 
 class JoinMatchRequest(BaseModel):

@@ -32,6 +32,7 @@ export interface StatePayload {
   code: string;
   state: GameState;
   seat_user: Record<string, number | null>;
+  seat_names: Record<string, string>;
   legal_moves: LegalMove[];
   deadline: number | null; // unix seconds the current player must act by (or null)
   now: number; // server unix seconds at send time (for clock-skew correction)

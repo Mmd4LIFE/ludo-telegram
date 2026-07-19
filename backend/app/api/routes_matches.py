@@ -14,14 +14,14 @@ from app.api.deps import get_current_user
 from app.database import get_session
 from app.ludo.board import Color
 from app.models import Match, MatchSeat, MatchStatus, User
-from app.schemas import CreateMatchRequest, JoinMatchRequest, MatchSummary
+from app.schemas import CreateMatchRequest, JoinMatchRequest, MatchSummary, SeatInfo
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
 _COLORS = [Color.RED, Color.GREEN, Color.YELLOW, Color.BLUE]
 
 
-def _summary(m: Match) -> MatchSummary:
+def _summary(m: Match, seats: list[SeatInfo] | None = None) -> MatchSummary:
     return MatchSummary(
         code=m.code,
         status=m.status.value,
@@ -29,7 +29,32 @@ def _summary(m: Match) -> MatchSummary:
         seated=sum(1 for s in m.seats if s.user_id is not None or s.is_bot),
         is_public=m.is_public,
         entry_fee=m.entry_fee,
+        seats=seats or [],
     )
+
+
+async def _seat_infos(session, m: Match) -> list[SeatInfo]:
+    """Per-seat display info (with joiner names) for a single match's waiting room."""
+    ids = [s.user_id for s in m.seats if s.user_id is not None]
+    names: dict[int, str] = {}
+    if ids:
+        rows = (
+            await session.execute(select(User.id, User.first_name).where(User.id.in_(ids)))
+        ).all()
+        names = {rid: (fn or "Player") for rid, fn in rows}
+    out: list[SeatInfo] = []
+    for s in sorted(m.seats, key=lambda x: x.seat_index):
+        if s.user_id is not None:
+            name = names.get(s.user_id, "Player")
+        elif s.is_bot:
+            name = "Bot"
+        else:
+            name = "Open"
+        out.append(SeatInfo(
+            seat_index=s.seat_index, color=s.color, name=name,
+            is_bot=s.is_bot, user_id=s.user_id,
+        ))
+    return out
 
 
 @router.post("", response_model=MatchSummary)
@@ -134,4 +159,4 @@ async def get_match(
     ).scalar_one_or_none()
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Match not found")
-    return _summary(match)
+    return _summary(match, await _seat_infos(session, match))

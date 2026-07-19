@@ -55,6 +55,7 @@ export default function Home() {
   const [state, setState] = useState<GameState | null>(null);
   const [legal, setLegal] = useState<LegalMove[]>([]);
   const [seatUser, setSeatUser] = useState<Record<string, number | null>>({});
+  const [seatNames, setSeatNames] = useState<Record<string, string>>({});
   const [clock, setClock] = useState<Clock | null>(null);
   const sockRef = useRef<MatchSocket | null>(null);
 
@@ -69,6 +70,7 @@ export default function Home() {
         setState(p.state);
         setLegal(p.legal_moves);
         setSeatUser(p.seat_user);
+        setSeatNames(p.seat_names ?? {});
         setClock({
           deadline: p.deadline,
           now: p.now,
@@ -171,6 +173,7 @@ export default function Home() {
         legal={legal}
         profile={profile}
         seatUser={seatUser}
+        seatNames={seatNames}
         clock={clock}
         sock={sockRef.current}
         onLeave={leaveMatch}
@@ -429,6 +432,32 @@ function WaitingRoom({
         </div>
       </Card>
 
+      {summary && summary.seats.length > 0 && (
+        <Card>
+          <SectionLabel>In this room</SectionLabel>
+          <div className="mt-2.5 flex flex-col gap-2.5">
+            {summary.seats.map((s) => (
+              <div key={s.seat_index} className="flex items-center gap-3">
+                <span className="size-3.5 shrink-0 rounded-full" style={{ background: COLOR_HEX[s.color] }} />
+                <span
+                  className={cn(
+                    "truncate text-sm font-semibold",
+                    s.name === "Open" && "font-normal text-muted-foreground"
+                  )}
+                >
+                  {s.name === "Open" ? "Waiting…" : s.name}
+                </span>
+                {s.user_id === profile.id && (
+                  <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary">
+                    YOU
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 gap-2">
         <Button onClick={share}>
           <Share2 className="size-4" /> Invite
@@ -558,6 +587,7 @@ function LiveMatch({
   legal,
   profile,
   seatUser,
+  seatNames,
   clock,
   sock,
   onLeave,
@@ -567,6 +597,7 @@ function LiveMatch({
   legal: LegalMove[];
   profile: Profile;
   seatUser: Record<string, number | null>;
+  seatNames: Record<string, string>;
   clock: Clock | null;
   sock: MatchSocket | null;
   onLeave: () => void;
@@ -624,8 +655,8 @@ function LiveMatch({
               style={active ? { boxShadow: `0 0 0 2px ${COLOR_HEX[p.color]}` } : undefined}
             >
               <div className="mx-auto size-4 rounded-full" style={{ background: COLOR_HEX[p.color] }} />
-              <div className="mt-1 text-[10px] font-bold text-muted-foreground">
-                {isMe ? "YOU" : seatUser[String(seat)] ? "P" + seat : "BOT"}
+              <div className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
+                {isMe ? "YOU" : seatNames[String(seat)] || (seatUser[String(seat)] ? "Player" : "BOT")}
               </div>
               <div className="flex items-center justify-center gap-1 text-[11px] font-bold tabular-nums">
                 <HomeIcon className="size-3 text-muted-foreground" /> {home}/4

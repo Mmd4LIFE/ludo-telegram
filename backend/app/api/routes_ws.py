@@ -52,6 +52,18 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
             await websocket.close(code=4401)
             return
         rt = await manager.get_runtime(session, match)
+        # refresh joiner names (picks up players who joined after the runtime started)
+        seated_ids = [uid for uid in rt.seat_user.values() if uid]
+        if seated_ids:
+            rows = (
+                await session.execute(
+                    select(User.id, User.first_name).where(User.id.in_(seated_ids))
+                )
+            ).all()
+            id_name = {rid: (fn or "Player") for rid, fn in rows}
+            for seat, uid in rt.seat_user.items():
+                if uid and uid in id_name:
+                    rt.seat_names[seat] = id_name[uid]
         match_id = match.id
         match_code = match.code
 

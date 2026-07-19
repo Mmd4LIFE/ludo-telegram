@@ -45,6 +45,14 @@ export interface Profile {
   bot_username: string;
 }
 
+export interface SeatInfo {
+  seat_index: number;
+  color: string;
+  name: string;
+  is_bot: boolean;
+  user_id: number | null;
+}
+
 export interface MatchSummary {
   code: string;
   status: string;
@@ -52,6 +60,7 @@ export interface MatchSummary {
   seated: number;
   is_public: boolean;
   entry_fee: number;
+  seats: SeatInfo[];
 }
 
 // Authenticate via Telegram initData; falls back to dev login in a plain browser.
