@@ -1,0 +1,30 @@
+# --- secrets / local config ---
+.env
+.env.*
+!.env.example
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# --- node / next ---
+node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+web/tsconfig.tsbuildinfo
+
+# --- build artifacts ---
+webout/
+*.tgz
+
+# --- os / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/

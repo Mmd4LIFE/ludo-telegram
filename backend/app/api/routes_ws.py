@@ -1,0 +1,83 @@
+"""WebSocket endpoint for a live Ludo match.
+
+Client connects to ``/ws/match/{code}?token=<jwt>``. On connect we register the socket,
+ensure the match runtime is running, and push the current state. The client then sends:
+
+    {"type": "roll"}                      -> roll the die (only honoured on your turn)
+    {"type": "move", "token_index": 0}    -> move one of your tokens
+    {"type": "ping"}                      -> keep-alive, replied with {"type":"pong"}
+    {"type": "sync"}                      -> request a fresh state snapshot
+    {"type": "emote", "emote": "fire"}    -> broadcast a reaction
+
+All game rules are enforced server-side by the runtime + pure engine; the client is a
+renderer. A stale or out-of-turn action is simply ignored.
+"""
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+
+from app.core.security import AuthError, decode_access_token
+from app.database import SessionLocal
+from app.game.connection import hub
+from app.game.manager import manager
+from app.models import Match, User
+
+router = APIRouter()
+logger = logging.getLogger("ludo.ws")
+
+ALLOWED_EMOTES = {"thumbs_up", "laugh", "fire", "party", "cry", "angry", "clap", "lucky"}
+
+
+@router.websocket("/ws/match/{code}")
+async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
+    try:
+        payload = decode_access_token(token)
+        user_id = int(payload["sub"])
+    except (AuthError, KeyError, ValueError):
+        await websocket.close(code=4401)
+        return
+
+    async with SessionLocal() as session:
+        match = (
+            await session.execute(select(Match).where(Match.code == code.upper()))
+        ).scalar_one_or_none()
+        if match is None:
+            await websocket.close(code=4404)
+            return
+        user = await session.get(User, user_id)
+        if user is None:
+            await websocket.close(code=4401)
+            return
+        rt = await manager.get_runtime(session, match)
+        match_id = match.id
+        match_code = match.code
+
+    rt.start()
+    await hub.connect(match_code, user_id, websocket)
+    try:
+        await websocket.send_json(rt.render(user_id))
+        while True:
+            data = await websocket.receive_json()
+            mtype = data.get("type")
+            if mtype in ("roll", "move"):
+                manager.handle_action(match_id, user_id, data)
+            elif mtype == "ping":
+                await websocket.send_json({"type": "pong"})
+            elif mtype == "sync":
+                await websocket.send_json(rt.render(user_id))
+            elif mtype == "emote":
+                emote = str(data.get("emote", ""))
+                if emote in ALLOWED_EMOTES:
+                    await hub.broadcast(
+                        match_code,
+                        {"type": "emote", "user_id": user_id, "emote": emote},
+                    )
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        logger.exception("ws error in match %s", match_code)
+    finally:
+        await hub.disconnect(match_code, user_id, websocket)

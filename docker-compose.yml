@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ludo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ludo_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-ludo}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ludo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ludonet
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+    networks:
+      - ludonet
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # Bind to localhost only — a Cloudflare Tunnel (or the host reverse proxy)
+      # terminates TLS and forwards here. WEB_PORT lets several bots share one box.
+      - "127.0.0.1:${WEB_PORT:-8081}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./webout:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+    networks:
+      - ludonet
+
+networks:
+  ludonet:
+
+volumes:
+  pgdata:
