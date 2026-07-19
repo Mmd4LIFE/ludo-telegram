@@ -6,7 +6,9 @@ const nextConfig: NextConfig = {
   output: "export",
   trailingSlash: true,
   images: { unoptimized: true },
-  typescript: { ignoreBuildErrors: true },
+  // Type errors fail the build — an undestructured prop once shipped as a runtime
+  // ReferenceError that crashed the whole Mini App. Keep this honest.
+  typescript: { ignoreBuildErrors: false },
 };
 
 export default nextConfig;

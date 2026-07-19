@@ -637,6 +637,7 @@ function LiveMatch({
   seatUser,
   seatNames,
   clock,
+  rematch,
   sock,
   onLeave,
 }: {
