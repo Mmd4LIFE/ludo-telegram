@@ -55,6 +55,7 @@ class MatchRuntime:
         self.code = match.code
         self.max_players = match.max_players
         self.entry_fee = match.entry_fee
+        self.is_bot_table = match.is_bot_table
         # seat index -> user_id (None = house bot)
         self.seat_user: dict[int, int | None] = {}
         self.seat_is_bot: dict[int, bool] = {}
@@ -89,6 +90,9 @@ class MatchRuntime:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
+
+    def is_done(self) -> bool:
+        return self._task is not None and self._task.done()
 
     def submit(self, user_id: int, msg: dict) -> None:
         """Called by the ws route with a human action ({'type': 'roll'|'move', ...})."""
@@ -126,6 +130,15 @@ class MatchRuntime:
         try:
             await self._broadcast()
             while self.state.phase is not Phase.FINISHED:
+                # A human match with nobody watching shouldn't keep grinding through
+                # 20s turn-timeouts on a tiny box. Give a grace window for a reconnect,
+                # then abandon it and let the janitor reap the runtime.
+                if not self.is_bot_table and not self._human_watching():
+                    await asyncio.sleep(settings.IDLE_SEAT_GRACE_SECONDS)
+                    if not self._human_watching():
+                        await self._abandon()
+                        return
+                    continue
                 await self._step()
                 await self._persist()
             await self._settle()
@@ -214,6 +227,15 @@ class MatchRuntime:
             if self.state.phase is not Phase.FINISHED:
                 m.status = MatchStatus.PLAYING
             await session.commit()
+
+    async def _abandon(self) -> None:
+        """Mark a viewer-less human match abandoned so it stops using the box."""
+        async with SessionLocal() as session:
+            m = await session.get(Match, self.match_id)
+            if m is not None and m.status is not MatchStatus.FINISHED:
+                m.status = MatchStatus.ABANDONED
+                await session.commit()
+        logger.info("match %s abandoned (no viewers)", self.code)
 
     async def _settle(self) -> None:
         """Write final placements, pay the pot to the winner, bump stats."""

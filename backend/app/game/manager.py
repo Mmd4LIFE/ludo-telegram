@@ -84,10 +84,10 @@ class MatchManager:
             await asyncio.sleep(settings.JANITOR_INTERVAL_SECONDS)
 
     async def _tick(self) -> None:
-        # drop runtimes whose game finished
+        # drop runtimes whose game finished or whose driver task has ended (abandoned)
         for mid, rt in list(self._runtimes.items()):
             from app.ludo import Phase
-            if rt.state.phase is Phase.FINISHED:
+            if rt.state.phase is Phase.FINISHED or rt.is_done():
                 await rt.stop()
                 self._runtimes.pop(mid, None)
         await self._ensure_bot_tables()
