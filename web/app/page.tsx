@@ -5,7 +5,6 @@
 // The board renders authoritative server state over a per-match WebSocket.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import {
   Dice5,
   Users,
@@ -302,22 +301,10 @@ function Lobby({
 
       {/* hero */}
       <Card className="relative overflow-hidden bg-gradient-to-br from-[#1a2340] to-card">
-        <div className="flex items-center gap-4">
-          <Image
-            src="/logo.png"
-            alt="Ludo"
-            width={72}
-            height={72}
-            className="rounded-2xl ring-1 ring-white/10"
-            priority
-          />
-          <div>
-            <h1 className="text-xl font-extrabold leading-tight">Ludo Board</h1>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Race four tokens home. Knock rivals back to base.
-            </p>
-          </div>
-        </div>
+        <h1 className="text-xl font-extrabold leading-tight">Ludo Board</h1>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Race four tokens home. Knock rivals back to base.
+        </p>
         <Button size="lg" className="mt-4 w-full" disabled={busy} onClick={onPlayBots}>
           <Bot className="size-5" /> Play vs Bots
         </Button>
