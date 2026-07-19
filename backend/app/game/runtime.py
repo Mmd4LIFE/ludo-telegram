@@ -76,6 +76,8 @@ class MatchRuntime:
         # wall-clock deadline for the current human action (unix seconds) — the client
         # renders a countdown against it; None when it's a bot's turn / no clock.
         self._deadline: float | None = None
+        # user_ids who requested a rematch after the game finished
+        self.rematch: set[int] = set()
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:

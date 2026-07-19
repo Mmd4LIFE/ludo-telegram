@@ -57,6 +57,10 @@ export default function Home() {
   const [seatUser, setSeatUser] = useState<Record<string, number | null>>({});
   const [seatNames, setSeatNames] = useState<Record<string, string>>({});
   const [clock, setClock] = useState<Clock | null>(null);
+  const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
+    votes: [],
+    humanIds: [],
+  });
   const sockRef = useRef<MatchSocket | null>(null);
 
   // ---- live match socket ----
@@ -64,6 +68,7 @@ export default function Home() {
     setRoom(null);
     setMatchCode(code);
     setState(null);
+    setRematch({ votes: [], humanIds: [] });
     const sock = new MatchSocket(code, (msg) => {
       if (msg.type === "state") {
         const p = msg as StatePayload;
@@ -77,6 +82,13 @@ export default function Home() {
           recvAt: Date.now() / 1000,
           turnSeconds: p.turn_seconds,
         });
+      } else if (msg.type === "rematch") {
+        setRematch({
+          votes: (msg.votes as number[]) ?? [],
+          humanIds: (msg.human_ids as number[]) ?? [],
+        });
+      } else if (msg.type === "rematch_ready") {
+        enterMatch(String(msg.code));
       }
     });
     sock.connect();
@@ -175,6 +187,7 @@ export default function Home() {
         seatUser={seatUser}
         seatNames={seatNames}
         clock={clock}
+        rematch={rematch}
         sock={sockRef.current}
         onLeave={leaveMatch}
       />
@@ -599,6 +612,7 @@ function LiveMatch({
   seatUser: Record<string, number | null>;
   seatNames: Record<string, string>;
   clock: Clock | null;
+  rematch: { votes: number[]; humanIds: number[] };
   sock: MatchSocket | null;
   onLeave: () => void;
 }) {
@@ -627,6 +641,11 @@ function LiveMatch({
     remaining = Math.max(0, clock.deadline - serverNow);
   }
   const pct = clock?.deadline ? Math.max(0, Math.min(100, (remaining / clock.turnSeconds) * 100)) : 0;
+
+  const nameFor = (seat: number) =>
+    seat === mySeat ? "You" : seatNames[String(seat)] || (seatUser[String(seat)] ? "Player" : "Bot");
+  const iVoted = rematch.votes.includes(profile.id);
+  const rematchNeeded = rematch.humanIds.length || Object.values(seatUser).filter(Boolean).length;
 
   return (
     <Shell>
@@ -666,27 +685,59 @@ function LiveMatch({
         })}
       </div>
 
-      {/* turn banner — fixed height so the board never shifts */}
-      <div
-        className="rounded-2xl py-2.5 text-center text-sm font-bold ring-1 ring-white/10"
-        style={{ background: finished ? "#161d2c" : `${COLOR_HEX[currentColor]}22` }}
-      >
-        {finished ? (
-          <span className="inline-flex items-center gap-2">
-            <Trophy className="size-4 text-primary" /> Winner: seat {state.ranking[0]}
-          </span>
-        ) : noMoves ? (
-          `No moves for ${currentColor} — passing…`
-        ) : myTurn ? (
-          state.phase === "roll" ? (
-            "Your turn — roll the die!"
-          ) : (
-            "Your turn — tap a glowing token"
-          )
-        ) : (
-          `${currentColor}'s turn…`
-        )}
-      </div>
+      {finished ? (
+        /* end-of-game broadcast — winner, standings, rematch */
+        <Card className="text-center lb-pop">
+          <Trophy className="mx-auto size-8 text-primary" />
+          <div className="mt-1 text-lg font-extrabold">{nameFor(state.ranking[0])} won!</div>
+          <div className="mt-3 flex flex-col gap-1.5">
+            {state.ranking.map((seat, i) => (
+              <div
+                key={seat}
+                className="flex items-center gap-2.5 rounded-xl bg-secondary/60 px-3 py-1.5 text-sm"
+              >
+                <span className="w-4 text-center font-bold text-muted-foreground">{i + 1}</span>
+                <span className="size-3 shrink-0 rounded-full" style={{ background: COLOR_HEX[state.players[seat].color] }} />
+                <span className="flex-1 truncate text-left font-semibold">{nameFor(seat)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <Button
+              variant="win"
+              disabled={iVoted}
+              onClick={() => {
+                haptic("medium");
+                sock?.rematch();
+              }}
+            >
+              {iVoted ? `Waiting ${rematch.votes.length}/${rematchNeeded}` : "Rematch"}
+            </Button>
+            <Button variant="secondary" onClick={onLeave}>
+              Back to lobby
+            </Button>
+          </div>
+          {rematch.votes.length > 0 && (
+            <div className="mt-2 text-xs text-muted-foreground">
+              {rematch.votes.length}/{rematchNeeded} want a rematch
+            </div>
+          )}
+        </Card>
+      ) : (
+        /* turn banner — fixed height so the board never shifts */
+        <div
+          className="rounded-2xl py-2.5 text-center text-sm font-bold ring-1 ring-white/10"
+          style={{ background: `${COLOR_HEX[currentColor]}22` }}
+        >
+          {noMoves
+            ? `No moves for ${currentColor} — passing…`
+            : myTurn
+              ? state.phase === "roll"
+                ? "Your turn — roll the die!"
+                : "Your turn — tap a glowing token"
+              : `${currentColor}'s turn…`}
+        </div>
+      )}
 
       <Card className="p-2">
         <Board
@@ -702,23 +753,19 @@ function LiveMatch({
       </Card>
 
       {/* dice + roll (the button's gold fill drains as your turn clock runs out) */}
-      <div className="flex items-center justify-between gap-3">
-        <RollingDie die={state.die} turn={state.turn} />
-        <RollButton
-          active={myTurn && state.phase === "roll" && !finished}
-          pct={clock?.deadline ? pct : 100}
-          seconds={remaining}
-          onRoll={() => {
-            haptic("medium");
-            sock?.roll();
-          }}
-        />
-      </div>
-
-      {finished && (
-        <Button variant="secondary" className="w-full" onClick={onLeave}>
-          Back to lobby
-        </Button>
+      {!finished && (
+        <div className="flex items-center justify-between gap-3">
+          <RollingDie die={state.die} turn={state.turn} />
+          <RollButton
+            active={myTurn && state.phase === "roll"}
+            pct={clock?.deadline ? pct : 100}
+            seconds={remaining}
+            onRoll={() => {
+              haptic("medium");
+              sock?.roll();
+            }}
+          />
+        </div>
       )}
     </Shell>
   );

@@ -75,6 +75,9 @@ export class MatchSocket {
   emote(emote: string): void {
     this.send({ type: "emote", emote });
   }
+  rematch(): void {
+    this.send({ type: "rematch" });
+  }
 
   close(): void {
     this.closed = true;

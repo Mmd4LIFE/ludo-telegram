@@ -87,6 +87,25 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
                         match_code,
                         {"type": "emote", "user_id": user_id, "emote": emote},
                     )
+            elif mtype == "rematch":
+                rt.rematch.add(user_id)
+                human_ids = {uid for uid in rt.seat_user.values() if uid}
+                if human_ids and rt.rematch.issuperset(human_ids):
+                    # everyone who played wants another game — spin one up and send all in
+                    async with SessionLocal() as s2:
+                        new_match = await manager.create_rematch(s2, match_id)
+                    await hub.broadcast(
+                        match_code, {"type": "rematch_ready", "code": new_match.code}
+                    )
+                else:
+                    await hub.broadcast(
+                        match_code,
+                        {
+                            "type": "rematch",
+                            "votes": sorted(rt.rematch),
+                            "human_ids": sorted(human_ids),
+                        },
+                    )
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001

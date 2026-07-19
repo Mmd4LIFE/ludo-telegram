@@ -54,7 +54,14 @@ const HOME_COL: Record<string, [number, number][]> = {
   YELLOW: [[13, 7], [12, 7], [11, 7], [10, 7], [9, 7]],
   BLUE: [[7, 13], [7, 12], [7, 11], [7, 10], [7, 9]],
 };
-const CENTER: [number, number] = [7, 7];
+// Finished tokens (progress 56) rest inside their OWN colour's centre triangle — the
+// centroid of each pinwheel wedge — instead of piling on the middle dot.
+const HOME_SLOT: Record<string, [number, number]> = {
+  RED: [6, 7],    // left wedge
+  GREEN: [7, 6],  // top wedge
+  YELLOW: [8, 7], // right wedge
+  BLUE: [7, 8],   // bottom wedge
+};
 
 const YARD: Record<string, { ox: number; oy: number; slots: [number, number][] }> = {
   RED: { ox: 0, oy: 0, slots: [[2, 2], [4, 2], [2, 4], [4, 4]] },
@@ -82,7 +89,7 @@ function starPts(cx: number, cy: number, R: number): string {
 function tokenCell(color: string, prog: number, ti: number): [number, number] {
   if (prog < 0) return YARD[color].slots[ti];
   if (prog <= 50) return TRACK[(START_OFFSET[color] + prog) % 52];
-  if (prog >= 56) return CENTER;
+  if (prog >= 56) return HOME_SLOT[color];
   return HOME_COL[color][prog - 51];
 }
 

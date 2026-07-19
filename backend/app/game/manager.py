@@ -41,6 +41,33 @@ class MatchManager:
         if rt is not None:
             rt.submit(user_id, msg)
 
+    async def create_rematch(self, session: AsyncSession, old_match_id: int) -> Match:
+        """Clone a finished match's seats into a fresh PLAYING match (a rematch)."""
+        seats = (
+            await session.execute(
+                select(MatchSeat).where(MatchSeat.match_id == old_match_id)
+            )
+        ).scalars().all()
+        old = await session.get(Match, old_match_id)
+        new = Match(
+            max_players=old.max_players if old else 4,
+            is_public=False,
+            entry_fee=old.entry_fee if old else 0,
+            is_bot_table=old.is_bot_table if old else False,
+            status=MatchStatus.PLAYING,
+        )
+        session.add(new)
+        await session.flush()
+        for s in seats:
+            session.add(MatchSeat(
+                match_id=new.id, seat_index=s.seat_index, color=s.color,
+                user_id=s.user_id, is_bot=s.is_bot, connected=False,
+            ))
+        await session.commit()
+        await session.refresh(new, attribute_names=["seats"])
+        logger.info("rematch %s created from %s", new.code, old_match_id)
+        return new
+
     # ---- janitor ----------------------------------------------------------
     def start_janitor(self) -> None:
         if self._janitor is None:
