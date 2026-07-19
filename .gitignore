@@ -28,3 +28,7 @@ webout/
 *.swp
 .idea/
 .vscode/
+
+# reference art (not shipped from root)
+image.png
+image copy.png

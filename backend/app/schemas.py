@@ -28,9 +28,13 @@ class UserProfile(BaseModel):
     xp: int
     games_played: int
     games_won: int
+    # bot @username, so the Mini App can build t.me/<bot>?start=rm-<code> invite links.
+    bot_username: str = ""
 
     @classmethod
     def from_user(cls, u) -> "UserProfile":
+        from app.bot.instance import get_bot_username
+
         return cls(
             id=u.id,
             first_name=u.first_name,
@@ -40,6 +44,7 @@ class UserProfile(BaseModel):
             xp=u.xp,
             games_played=u.games_played,
             games_won=u.games_won,
+            bot_username=get_bot_username(),
         )
 
 

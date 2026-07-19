@@ -42,6 +42,7 @@ export interface Profile {
   xp: number;
   games_played: number;
   games_won: number;
+  bot_username: string;
 }
 
 export interface MatchSummary {
@@ -74,6 +75,7 @@ export async function authenticate(): Promise<Profile> {
 export const api = {
   me: () => req<Profile>("GET", "/api/profile/me"),
   listMatches: () => req<MatchSummary[]>("GET", "/api/matches"),
+  getMatch: (code: string) => req<MatchSummary>("GET", `/api/matches/${code}`),
   createMatch: (opts: {
     max_players?: number;
     is_public?: boolean;

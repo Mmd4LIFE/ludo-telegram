@@ -26,9 +26,17 @@ logger = logging.getLogger("ludo.bot")
 router = Router()
 
 
-def _play_kb() -> InlineKeyboardMarkup:
+def _play_kb(start_param: str | None = None) -> InlineKeyboardMarkup:
+    # A WebApp button opens the Mini App at this exact URL; the app reads ?startapp=
+    # (see lib/telegram.ts startParam) so a room-invite deep link joins that room.
+    url = settings.WEBAPP_URL
+    text = "🎲 Play Ludo"
+    if start_param:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}startapp={start_param}"
+        text = "🎲 Join the room"
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🎲 Play Ludo", web_app=WebAppInfo(url=settings.WEBAPP_URL))
+        InlineKeyboardButton(text=text, web_app=WebAppInfo(url=url))
     ]])
 
 
@@ -37,7 +45,10 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     tg = message.from_user
     if tg is None:
         return
-    referral = command.args  # payload after /start, e.g. "ref-42" or "join-ABCDE"
+    payload = command.args  # after /start, e.g. "ref-42" or "rm-ABCDE"
+    # Only ref-* is a referral; rm-* is a room invite handed straight to the Mini App.
+    referral = payload if payload and payload.startswith("ref-") else None
+    room = payload if payload and payload.startswith("rm-") else None
     async with SessionLocal() as session:
         user, created = await get_or_create_from_telegram(
             session, {
@@ -52,6 +63,13 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             user.bot_started = True
             user.coins += settings.BOT_START_BONUS
         await session.commit()
+
+    if room:
+        await message.answer(
+            "🎲 <b>You're invited to a Ludo room!</b>\n\nTap below to join and play.",
+            reply_markup=_play_kb(room),
+        )
+        return
 
     await message.answer(
         "🎲 <b>Ludo Board</b>\n\n"

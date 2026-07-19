@@ -1,35 +1,65 @@
 "use client";
 
-// Single-screen Mini App for the base: authenticate -> lobby -> live match.
-// Deliberately compact; a follow-up session splits this into proper screens/router,
-// adds the profile/economy/cosmetics tabs, and richer match UX. See docs/ROADMAP.md.
+// Ludo Board — Telegram Mini App shell.
+// Views: auth splash → lobby → waiting room (with native Telegram invite) → live match.
+// The board renders authoritative server state over a per-match WebSocket.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, authenticate, Profile } from "@/lib/api";
-import { getInitData, haptic, initTelegram } from "@/lib/telegram";
+import Image from "next/image";
+import {
+  Dice5,
+  Users,
+  Share2,
+  Copy,
+  ArrowLeft,
+  Trophy,
+  Loader2,
+  Bot,
+  Plus,
+  Coins,
+} from "lucide-react";
+import { api, authenticate, MatchSummary, Profile } from "@/lib/api";
+import {
+  getInitData,
+  haptic,
+  initTelegram,
+  notify,
+  shareRoom,
+  startParam,
+} from "@/lib/telegram";
 import { GameState, LegalMove, MatchSocket, StatePayload } from "@/lib/ws";
+import { Button } from "@/components/ui/button";
+import { Card, SectionLabel } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import Board from "@/components/board";
 
-const COLOR_NAMES = ["RED", "GREEN", "YELLOW", "BLUE"];
+const COLOR_HEX: Record<string, string> = {
+  RED: "#e5484d",
+  GREEN: "#30a46c",
+  YELLOW: "#f2b705",
+  BLUE: "#3e63dd",
+};
+
+type Room = { code: string; host: boolean };
 
 export default function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState<string>("");         // active match code
-  const [joinCode, setJoinCode] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
+  const [room, setRoom] = useState<Room | null>(null); // waiting room
+  const [matchCode, setMatchCode] = useState<string>(""); // live match
   const [state, setState] = useState<GameState | null>(null);
   const [legal, setLegal] = useState<LegalMove[]>([]);
   const [seatUser, setSeatUser] = useState<Record<string, number | null>>({});
   const sockRef = useRef<MatchSocket | null>(null);
 
-  useEffect(() => {
-    initTelegram();
-    authenticate().then(setProfile).catch((e) => setError(String(e)));
-  }, []);
-
-  const enterMatch = useCallback((c: string) => {
-    setCode(c);
-    const sock = new MatchSocket(c, (msg) => {
+  // ---- live match socket ----
+  const enterMatch = useCallback((code: string) => {
+    setRoom(null);
+    setMatchCode(code);
+    setState(null);
+    const sock = new MatchSocket(code, (msg) => {
       if (msg.type === "state") {
         const p = msg as StatePayload;
         setState(p.state);
@@ -44,99 +74,401 @@ export default function Home() {
   const leaveMatch = useCallback(() => {
     sockRef.current?.close();
     sockRef.current = null;
-    setCode("");
+    setMatchCode("");
     setState(null);
+    setRoom(null);
   }, []);
 
-  const mySeat = (() => {
-    if (!profile) return null;
-    for (const [seat, uid] of Object.entries(seatUser)) {
-      if (uid === profile.id) return Number(seat);
+  // ---- auth + deep-link ----
+  useEffect(() => {
+    initTelegram();
+    authenticate()
+      .then((p) => {
+        setProfile(p);
+        const sp = startParam();
+        if (sp && sp.startsWith("rm-")) {
+          const code = sp.slice(3).toUpperCase();
+          api
+            .joinMatch(code)
+            .then(() => enterMatch(code))
+            .catch((e) => setError(String(e)));
+        }
+      })
+      .catch((e) => setError(String(e)));
+  }, [enterMatch]);
+
+  // ---- lobby actions ----
+  const playBots = async () => {
+    setBusy(true);
+    haptic("medium");
+    try {
+      const m = await api.createMatch({ max_players: 4, fill_with_bots: true });
+      enterMatch(m.code);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
     }
-    return null;
-  })();
+  };
+
+  const createRoom = async () => {
+    setBusy(true);
+    haptic("medium");
+    try {
+      const m = await api.createMatch({ max_players: 4 });
+      setRoom({ code: m.code, host: true });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const joinFromList = async (code: string) => {
+    setBusy(true);
+    haptic("light");
+    try {
+      await api.joinMatch(code);
+      enterMatch(code);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // ---- render ----
-  if (error) return <div className="wrap"><div className="card">⚠️ {error}</div></div>;
-  if (!profile) return <div className="wrap"><div className="card">Loading…</div></div>;
+  if (error)
+    return (
+      <Shell>
+        <Card className="text-center">
+          <div className="text-4xl">⚠️</div>
+          <p className="mt-2 text-sm text-muted-foreground break-words">{error}</p>
+          <Button className="mt-4 w-full" onClick={() => location.reload()}>
+            Reload
+          </Button>
+        </Card>
+      </Shell>
+    );
 
-  if (code && state) {
+  if (!profile) return <Splash />;
+
+  if (matchCode && state)
     return (
       <LiveMatch
-        code={code}
+        code={matchCode}
         state={state}
         legal={legal}
-        mySeat={mySeat}
+        profile={profile}
         seatUser={seatUser}
         sock={sockRef.current}
         onLeave={leaveMatch}
       />
     );
-  }
+
+  if (matchCode && !state) return <Splash label="Joining game…" />;
+
+  if (room)
+    return (
+      <WaitingRoom
+        room={room}
+        profile={profile}
+        onEnter={enterMatch}
+        onBack={() => setRoom(null)}
+      />
+    );
 
   return (
-    <div className="wrap">
-      <div className="row spread">
-        <h1>🎲 Ludo Board</h1>
-        <span className="pill">🪙 {profile.coins.toLocaleString()}</span>
-      </div>
-      <div className="muted">
-        Hi {profile.first_name} · Lvl {profile.level} · {profile.games_won}/{profile.games_played} won
-        {!getInitData() && " · (dev login)"}
-      </div>
+    <Lobby
+      profile={profile}
+      busy={busy}
+      onPlayBots={playBots}
+      onCreateRoom={createRoom}
+      onJoin={joinFromList}
+    />
+  );
+}
 
-      <div className="card">
-        <h2>Quick play</h2>
-        <p className="muted">Start instantly against three house bots.</p>
-        <button
-          className="primary"
-          style={{ width: "100%" }}
-          onClick={async () => {
-            const m = await api.createMatch({ max_players: 4, fill_with_bots: true });
-            enterMatch(m.code);
-          }}
-        >
-          Play vs bots
-        </button>
-      </div>
+/* ------------------------------------------------------------------ shells */
 
-      <div className="card">
-        <h2>Play with friends</h2>
-        <p className="muted">Create a room and share the code, or join one.</p>
-        <div className="row" style={{ marginBottom: 10 }}>
-          <button
-            className="good"
-            style={{ flex: 1 }}
-            onClick={async () => {
-              const m = await api.createMatch({ max_players: 4 });
-              enterMatch(m.code);
-            }}
-          >
-            Create room
-          </button>
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pb-8 pt-5">
+      {children}
+    </main>
+  );
+}
+
+function Splash({ label = "Loading…" }: { label?: string }) {
+  return (
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-4">
+      <div className="text-5xl lb-pop">🎲</div>
+      <div className="text-lg font-extrabold tracking-widest text-primary">LUDO BOARD</div>
+      <Loader2 className="size-5 text-muted-foreground lb-spin" />
+      <div className="text-xs text-muted-foreground">{label}</div>
+    </main>
+  );
+}
+
+/* ------------------------------------------------------------------ lobby */
+
+function WalletBar({ profile }: { profile: Profile }) {
+  const initial = (profile.first_name || "P").slice(0, 1).toUpperCase();
+  const xpPct = Math.min(100, ((profile.xp % 500) / 500) * 100);
+  return (
+    <div className="flex items-center gap-3">
+      <div className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-secondary to-card text-lg font-bold ring-1 ring-white/10">
+        {initial}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate font-bold">{profile.first_name || "Player"}</span>
+          <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
+            LVL {profile.level}
+          </span>
         </div>
-        <div className="row">
-          <input
-            placeholder="CODE"
-            value={joinCode}
-            maxLength={6}
-            onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-primary to-[#e58e26]"
+            style={{ width: `${xpPct}%` }}
           />
-          <button
-            disabled={joinCode.length < 4}
-            onClick={async () => {
-              try {
-                const m = await api.joinMatch(joinCode);
-                enterMatch(m.code);
-              } catch (e) {
-                setError(String(e));
-              }
-            }}
-          >
-            Join
-          </button>
         </div>
       </div>
+      <div className="flex items-center gap-1.5 rounded-2xl bg-secondary px-3 py-2 ring-1 ring-white/10">
+        <Coins className="size-4 text-primary" />
+        <span className="text-sm font-bold tabular-nums">
+          {profile.coins.toLocaleString()}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function Lobby({
+  profile,
+  busy,
+  onPlayBots,
+  onCreateRoom,
+  onJoin,
+}: {
+  profile: Profile;
+  busy: boolean;
+  onPlayBots: () => void;
+  onCreateRoom: () => void;
+  onJoin: (code: string) => void;
+}) {
+  const [tables, setTables] = useState<MatchSummary[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.listMatches().then((t) => alive && setTables(t)).catch(() => {});
+    load();
+    const id = setInterval(load, 4000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  return (
+    <Shell>
+      <WalletBar profile={profile} />
+
+      {/* hero */}
+      <Card className="relative overflow-hidden bg-gradient-to-br from-[#1a2340] to-card">
+        <div className="flex items-center gap-4">
+          <Image
+            src="/logo.png"
+            alt="Ludo"
+            width={72}
+            height={72}
+            className="rounded-2xl ring-1 ring-white/10"
+            priority
+          />
+          <div>
+            <h1 className="text-xl font-extrabold leading-tight">Ludo Board</h1>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Race four tokens home. Knock rivals back to base.
+            </p>
+          </div>
+        </div>
+        <Button size="lg" className="mt-4 w-full" disabled={busy} onClick={onPlayBots}>
+          <Bot className="size-5" /> Play vs Bots
+        </Button>
+      </Card>
+
+      {/* friends */}
+      <Card>
+        <SectionLabel>Play with friends</SectionLabel>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Create a private room and invite friends straight from Telegram.
+        </p>
+        <Button
+          variant="secondary"
+          className="mt-3 w-full"
+          disabled={busy}
+          onClick={onCreateRoom}
+        >
+          <Plus className="size-4" /> Create private room
+        </Button>
+      </Card>
+
+      {/* open tables */}
+      <div className="flex flex-col gap-2">
+        <SectionLabel className="px-1">Open rooms</SectionLabel>
+        {tables.length === 0 ? (
+          <Card className="text-center text-xs text-muted-foreground">
+            No open rooms right now — create one above.
+          </Card>
+        ) : (
+          tables.map((t) => (
+            <button
+              key={t.code}
+              disabled={busy}
+              onClick={() => onJoin(t.code)}
+              className="flex items-center justify-between rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-white/10 transition active:scale-[0.98] disabled:opacity-50"
+            >
+              <div className="flex items-center gap-3">
+                <Users className="size-4 text-muted-foreground" />
+                <div>
+                  <div className="font-bold tracking-wider">{t.code}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {t.seated}/{t.max_players} seated
+                  </div>
+                </div>
+              </div>
+              <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-bold text-primary">
+                Join
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+
+      <p className="mt-auto pt-4 text-center text-[10px] text-muted-foreground">
+        {profile.games_won}/{profile.games_played} games won
+        {!getInitData() && " · dev login"}
+      </p>
+    </Shell>
+  );
+}
+
+/* --------------------------------------------------------------- waiting */
+
+function WaitingRoom({
+  room,
+  profile,
+  onEnter,
+  onBack,
+}: {
+  room: Room;
+  profile: Profile;
+  onEnter: (code: string) => void;
+  onBack: () => void;
+}) {
+  const [summary, setSummary] = useState<MatchSummary | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api.getMatch(room.code).then((s) => alive && setSummary(s)).catch(() => {});
+    load();
+    const id = setInterval(load, 2000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [room.code]);
+
+  const seated = summary?.seated ?? 1;
+  const ready = seated >= 2;
+
+  const share = () => {
+    haptic("light");
+    shareRoom(profile.bot_username, room.code, "Join my Ludo game! 🎲");
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        `https://t.me/${profile.bot_username}?start=rm-${room.code}`
+      );
+      setCopied(true);
+      notify("success");
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      share();
+    }
+  };
+
+  return (
+    <Shell>
+      <button
+        onClick={onBack}
+        className="flex items-center gap-1.5 text-sm text-muted-foreground"
+      >
+        <ArrowLeft className="size-4" /> Back
+      </button>
+
+      <Card className="text-center">
+        <SectionLabel>Room code</SectionLabel>
+        <div className="mt-2 text-4xl font-extrabold tracking-[0.3em] text-primary">
+          {room.code}
+        </div>
+        <div className="mt-3 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 lb-spin" /> Waiting for players · {seated}/4 seated
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button onClick={share}>
+          <Share2 className="size-4" /> Invite
+        </Button>
+        <Button variant="secondary" onClick={copy}>
+          <Copy className="size-4" /> {copied ? "Copied" : "Copy link"}
+        </Button>
+      </div>
+
+      <Button
+        size="lg"
+        variant={ready ? "win" : "secondary"}
+        className="w-full"
+        disabled={!ready}
+        onClick={() => onEnter(room.code)}
+      >
+        {ready ? "Start game" : "Waiting for one more…"}
+      </Button>
+
+      <p className="text-center text-xs text-muted-foreground">
+        Share the invite — your friends open it in Telegram and drop straight into this room.
+      </p>
+    </Shell>
+  );
+}
+
+/* ---------------------------------------------------------------- match */
+
+function Pips({ n }: { n: number | null }) {
+  if (!n) return <span className="text-2xl font-extrabold text-[#0e1320]">–</span>;
+  const layout: Record<number, [number, number][]> = {
+    1: [[1, 1]],
+    2: [[0, 0], [2, 2]],
+    3: [[0, 0], [1, 1], [2, 2]],
+    4: [[0, 0], [2, 0], [0, 2], [2, 2]],
+    5: [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]],
+    6: [[0, 0], [2, 0], [0, 1], [2, 1], [0, 2], [2, 2]],
+  };
+  return (
+    <div className="grid size-11 grid-cols-3 grid-rows-3 gap-0.5 p-1.5">
+      {Array.from({ length: 9 }).map((_, i) => {
+        const c = i % 3,
+          r = Math.floor(i / 3);
+        const on = layout[n].some(([x, y]) => x === c && y === r);
+        return (
+          <div
+            key={i}
+            className={cn("rounded-full", on ? "bg-[#0e1320]" : "bg-transparent")}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -145,7 +477,7 @@ function LiveMatch({
   code,
   state,
   legal,
-  mySeat,
+  profile,
   seatUser,
   sock,
   onLeave,
@@ -153,38 +485,82 @@ function LiveMatch({
   code: string;
   state: GameState;
   legal: LegalMove[];
-  mySeat: number | null;
+  profile: Profile;
   seatUser: Record<string, number | null>;
   sock: MatchSocket | null;
   onLeave: () => void;
 }) {
+  const mySeat = (() => {
+    for (const [seat, uid] of Object.entries(seatUser)) {
+      if (uid === profile.id) return Number(seat);
+    }
+    return null;
+  })();
+
   const myTurn = mySeat !== null && state.current === mySeat;
-  const currentColor = COLOR_NAMES[state.players[state.current]?.color as unknown as number] ??
-    state.players[state.current]?.color;
   const finished = state.phase === "finished";
+  const currentColor = state.players[state.current]?.color ?? "";
 
   return (
-    <div className="wrap">
-      <div className="row spread">
-        <span className="pill">Room {code}</span>
-        <button onClick={onLeave}>Leave</button>
+    <Shell>
+      <div className="flex items-center justify-between">
+        <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-bold tracking-wider ring-1 ring-white/10">
+          ROOM {code}
+        </span>
+        <Button variant="ghost" size="sm" onClick={onLeave}>
+          <ArrowLeft className="size-4" /> Leave
+        </Button>
       </div>
 
-      {finished ? (
-        <div className="turn-banner">
-          🏆 Winner: seat {state.ranking[0]} ({state.players[state.ranking[0]]?.color})
-        </div>
-      ) : (
-        <div className="turn-banner">
-          {myTurn
-            ? state.phase === "roll"
-              ? "Your turn — roll!"
-              : "Your turn — pick a token"
-            : `Waiting for ${state.players[state.current]?.color}…`}
-        </div>
-      )}
+      {/* players */}
+      <div className="flex gap-2">
+        {state.players.map((p, seat) => {
+          const home = p.tokens.filter((t) => t >= 56).length;
+          const isMe = seat === mySeat;
+          const active = seat === state.current && !finished;
+          return (
+            <div
+              key={seat}
+              className={cn(
+                "flex-1 rounded-2xl bg-card px-2 py-2 text-center ring-1 transition",
+                active ? "ring-2" : "ring-white/10"
+              )}
+              style={active ? { boxShadow: `0 0 0 2px ${COLOR_HEX[p.color]}` } : undefined}
+            >
+              <div
+                className="mx-auto size-4 rounded-full"
+                style={{ background: COLOR_HEX[p.color] }}
+              />
+              <div className="mt-1 text-[10px] font-bold text-muted-foreground">
+                {isMe ? "YOU" : seatUser[String(seat)] ? "P" + seat : "BOT"}
+              </div>
+              <div className="text-[11px] font-bold tabular-nums">🏠 {home}/4</div>
+            </div>
+          );
+        })}
+      </div>
 
-      <div className="card">
+      {/* turn banner */}
+      <div
+        className="rounded-2xl py-2.5 text-center text-sm font-bold ring-1 ring-white/10"
+        style={{ background: finished ? "#161d2c" : `${COLOR_HEX[currentColor]}22` }}
+      >
+        {finished ? (
+          <span className="inline-flex items-center gap-2">
+            <Trophy className="size-4 text-primary" /> Winner: seat {state.ranking[0]}
+          </span>
+        ) : myTurn ? (
+          state.phase === "roll" ? (
+            "Your turn — roll the die!"
+          ) : (
+            "Your turn — pick a token"
+          )
+        ) : (
+          `Waiting for ${currentColor}…`
+        )}
+      </div>
+
+      <Card className="p-2">
         <Board
           state={state}
           legal={legal}
@@ -194,21 +570,31 @@ function LiveMatch({
             sock?.move(ti);
           }}
         />
-      </div>
+      </Card>
 
-      <div className="row spread">
-        <div className="die">{state.die ?? "–"}</div>
-        <button
-          className="primary"
-          disabled={!myTurn || state.phase !== "roll"}
+      {/* dice + roll */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="grid size-14 place-items-center rounded-2xl bg-white shadow-lg">
+          <Pips n={state.die} />
+        </div>
+        <Button
+          size="lg"
+          className="flex-1"
+          disabled={!myTurn || state.phase !== "roll" || finished}
           onClick={() => {
             haptic("medium");
             sock?.roll();
           }}
         >
-          🎲 Roll
-        </button>
+          <Dice5 className="size-5" /> Roll
+        </Button>
       </div>
-    </div>
+
+      {finished && (
+        <Button variant="secondary" className="w-full" onClick={onLeave}>
+          Back to lobby
+        </Button>
+      )}
+    </Shell>
   );
 }
