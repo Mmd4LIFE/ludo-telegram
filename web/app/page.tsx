@@ -637,6 +637,7 @@ function LiveMatch({
           state={state}
           legal={legal}
           mySeat={mySeat}
+          myColor={mySeat !== null ? state.players[mySeat]?.color ?? null : null}
           onMove={(ti) => {
             haptic("light");
             sock?.move(ti);
