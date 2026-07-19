@@ -37,19 +37,17 @@ def upgrade() -> None:
     )
     op.create_index("ix_users_telegram_id", "users", ["telegram_id"], unique=True)
 
-    match_status = postgresql.ENUM(
-        "waiting", "playing", "finished", "abandoned",
-        name="match_status",
-    )
-    match_status.create(op.get_bind(), checkfirst=True)
-
+    # Create the matches table; the matches.status column owns the match_status
+    # enum and creates it exactly once. (An explicit standalone ENUM.create() plus a
+    # column create_type=False proved fragile across SQLAlchemy versions — the column
+    # still emitted CREATE TYPE, colliding with the manual create. Let the column own it.)
     op.create_table(
         "matches",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("code", sa.String(8), nullable=False),
         sa.Column(
             "status",
-            sa.Enum("waiting", "playing", "finished", "abandoned", name="match_status", create_type=False),
+            sa.Enum("waiting", "playing", "finished", "abandoned", name="match_status"),
             nullable=False, server_default="waiting",
         ),
         sa.Column("max_players", sa.Integer(), nullable=False, server_default="4"),

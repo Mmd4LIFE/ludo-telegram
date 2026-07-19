@@ -44,7 +44,13 @@ class Match(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(8), unique=True, index=True, default=_new_code)
     status: Mapped[MatchStatus] = mapped_column(
-        Enum(MatchStatus, name="match_status"), default=MatchStatus.WAITING, index=True
+        # values_callable pins the DB representation to the enum *values*
+        # ("waiting", "playing", …) — the lowercase strings the migration created.
+        # Without it SQLAlchemy persists member *names* (WAITING, PLAYING) and every
+        # query mismatches the Postgres enum type.
+        Enum(MatchStatus, name="match_status", values_callable=lambda e: [m.value for m in e]),
+        default=MatchStatus.WAITING,
+        index=True,
     )
     max_players: Mapped[int] = mapped_column(Integer, default=4)   # 2..4
     is_public: Mapped[bool] = mapped_column(Boolean, default=True)
