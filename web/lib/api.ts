@@ -77,6 +77,21 @@ export interface ChatMessage {
   text: string;
 }
 
+export interface DiceEntry {
+  user_id: number;
+  name: string;
+  rolls: number;
+  total: number;
+  avg: number;
+  best: number;
+  last_value: number;
+}
+
+export interface DiceState {
+  cooldown: number;
+  ranking: DiceEntry[];
+}
+
 // Authenticate via Telegram initData; falls back to dev login in a plain browser.
 export async function authenticate(): Promise<Profile> {
   const initData = getInitData();
@@ -113,6 +128,8 @@ export const api = {
     req<MatchSummary>("POST", `/api/matches/${code}/reject`, { user_id }),
   startMatch: (code: string) => req<MatchSummary>("POST", `/api/matches/${code}/start`),
   deleteMatch: (code: string) => req<{ ok: boolean }>("DELETE", `/api/matches/${code}`),
+  getDice: (code: string) => req<DiceState>("GET", `/api/matches/${code}/dice`),
+  rollDice: (code: string) => req<DiceState>("POST", `/api/matches/${code}/dice`),
   getChat: (code: string) => req<ChatMessage[]>("GET", `/api/matches/${code}/chat`),
   sendChat: (code: string, text: string) =>
     req<ChatMessage[]>("POST", `/api/matches/${code}/chat`, { text }),

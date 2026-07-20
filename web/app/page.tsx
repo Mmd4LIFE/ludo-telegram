@@ -20,7 +20,7 @@ import {
   AlertTriangle,
   Trash2,
 } from "lucide-react";
-import { api, authenticate, ChatMessage, MatchSummary, Profile } from "@/lib/api";
+import { api, authenticate, ChatMessage, DiceState, MatchSummary, Profile } from "@/lib/api";
 import {
   getInitData,
   haptic,
@@ -428,8 +428,25 @@ function WaitingRoom({
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [dice, setDice] = useState<DiceState | null>(null);
+  const [rolled, setRolled] = useState<number | null>(null);
+  const [coolUntil, setCoolUntil] = useState(0);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Poll the room: seats, pending requests, chat — and follow the host into the game.
+  // cooldown ticker (only while a cooldown is actually running)
+  const [, tickCool] = useState(0);
+  useEffect(() => {
+    if (coolUntil <= Date.now()) return;
+    const id = setInterval(() => tickCool((n) => n + 1), 200);
+    return () => clearInterval(id);
+  }, [coolUntil]);
+  const coolLeft = Math.max(0, (coolUntil - Date.now()) / 1000);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: "end" });
+  }, [chat.length]);
+
+  // Poll the room: seats, pending requests, chat, dice — and follow the host in.
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -445,6 +462,12 @@ function WaitingRoom({
       try {
         const c = await api.getChat(room.code);
         if (alive) setChat(c);
+      } catch {
+        /* not in the room yet */
+      }
+      try {
+        const d = await api.getDice(room.code);
+        if (alive) setDice(d);
       } catch {
         /* not in the room yet */
       }
@@ -499,6 +522,14 @@ function WaitingRoom({
       if (!t) return;
       setChat(await api.sendChat(room.code, t));
       setDraft("");
+    });
+  const roll = () =>
+    guard(async () => {
+      haptic("medium");
+      const d = await api.rollDice(room.code);
+      setDice(d);
+      setRolled(d.ranking.find((r) => r.user_id === profile.id)?.last_value ?? null);
+      setCoolUntil(Date.now() + d.cooldown * 1000);
     });
 
   return (
@@ -602,9 +633,50 @@ function WaitingRoom({
         </Button>
       </div>
 
+      {/* fun dice while you wait — server-rolled, rate-limited, ranked */}
+      <Card>
+        <div className="flex items-baseline justify-between">
+          <SectionLabel>Lucky dice</SectionLabel>
+          <span className="text-[10px] text-muted-foreground">best average wins</span>
+        </div>
+        <div className="mt-2.5 flex items-center gap-3">
+          <div className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white shadow-lg">
+            <Pips n={rolled} />
+          </div>
+          <Button className="flex-1" disabled={busy || coolLeft > 0} onClick={roll}>
+            <Dice5 className="size-5" />
+            {coolLeft > 0 ? `Wait ${Math.ceil(coolLeft)}s` : "Roll"}
+          </Button>
+        </div>
+        {dice && dice.ranking.length > 0 && (
+          <div className="mt-3 flex flex-col gap-1.5">
+            {dice.ranking.map((r, i) => (
+              <div
+                key={r.user_id}
+                className="flex items-center gap-2 rounded-lg bg-secondary/50 px-2.5 py-1.5 text-xs"
+              >
+                <span className="w-4 text-center font-bold text-muted-foreground">{i + 1}</span>
+                <span
+                  className={cn(
+                    "flex-1 truncate font-semibold",
+                    r.user_id === profile.id && "text-primary"
+                  )}
+                >
+                  {r.user_id === profile.id ? "You" : r.name}
+                </span>
+                <span className="tabular-nums text-muted-foreground">{r.rolls}×</span>
+                <span className="tabular-nums text-muted-foreground">sum {r.total}</span>
+                <span className="tabular-nums font-bold">avg {r.avg.toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <Card>
         <SectionLabel>Room chat</SectionLabel>
-        <div className="no-scrollbar mt-2 flex max-h-44 flex-col gap-1.5 overflow-y-auto">
+        {/* fixed frame so the lobby layout never jumps as messages arrive */}
+        <div className="no-scrollbar mt-2 flex h-36 flex-col gap-1.5 overflow-y-auto">
           {chat.length === 0 && (
             <div className="text-xs text-muted-foreground">Say hi while you wait.</div>
           )}
@@ -621,6 +693,7 @@ function WaitingRoom({
               <span className="break-words">{m.text}</span>
             </div>
           ))}
+          <div ref={chatEndRef} />
         </div>
         <div className="mt-2 flex gap-2">
           <input
@@ -640,7 +713,7 @@ function WaitingRoom({
       </Card>
 
       {isHost ? (
-        <div className="flex flex-col gap-2">
+        <div className="mt-auto flex flex-col gap-2 pt-2">
           <Button
             size="lg"
             variant={canStart ? "win" : "secondary"}
@@ -668,7 +741,7 @@ function WaitingRoom({
           </Button>
         </div>
       ) : (
-        <p className="text-center text-xs text-muted-foreground">
+        <p className="mt-auto pt-2 text-center text-xs text-muted-foreground">
           {iAmSeated
             ? "You're in! The host will start the game."
             : "The host needs to accept you into the room."}

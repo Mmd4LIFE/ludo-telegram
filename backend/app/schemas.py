@@ -109,3 +109,19 @@ class ChatMessage(BaseModel):
 
 class SendChatRequest(BaseModel):
     text: str
+
+
+# --- waiting-room dice game --------------------------------------------------
+class DiceEntry(BaseModel):
+    user_id: int
+    name: str
+    rolls: int
+    total: int
+    avg: float
+    best: int
+    last_value: int
+
+
+class DiceState(BaseModel):
+    cooldown: float                 # seconds between rolls
+    ranking: list[DiceEntry] = []

@@ -14,9 +14,15 @@ from app.api.deps import get_current_user
 from app.database import get_session
 from app.ludo.board import Color
 from app.models import Match, MatchSeat, MatchStatus, User
+import math
+import random
+import time
+
 from app.schemas import (
     AcceptJoinerRequest,
     ChatMessage,
+    DiceEntry,
+    DiceState,
     CreateMatchRequest,
     JoinMatchRequest,
     MatchSummary,
@@ -37,6 +43,26 @@ _CHAT_MAX = 60
 
 # Joiners awaiting the host's approval: room code -> [{user_id, name}]
 _PENDING: dict[str, list[dict]] = {}
+
+# Fun waiting-room dice: room code -> {user_id: stats}. Rolled server-side so the
+# ranking can't be faked, rate-limited so it can't be spammed.
+_DICE: dict[str, dict[int, dict]] = {}
+DICE_COOLDOWN = 3.0
+
+
+def _dice_state(code: str) -> DiceState:
+    room = _DICE.get(code, {})
+    entries = [
+        DiceEntry(
+            user_id=s["user_id"], name=s["name"], rolls=s["rolls"], total=s["total"],
+            avg=round(s["total"] / s["rolls"], 2) if s["rolls"] else 0.0,
+            best=s["best"], last_value=s["last_value"],
+        )
+        for s in room.values()
+    ]
+    # luckiest first: best average, then most rolls
+    entries.sort(key=lambda e: (e.avg, e.rolls), reverse=True)
+    return DiceState(cooldown=DICE_COOLDOWN, ranking=entries)
 
 
 def _summary(m: Match, seats: list[SeatInfo] | None = None) -> MatchSummary:
@@ -271,6 +297,7 @@ async def start_match(
         raise HTTPException(status.HTTP_409_CONFLICT, "Need at least 2 players to start")
     match.status = MatchStatus.PLAYING
     _PENDING.pop(match.code, None)   # anyone still queued missed the boat
+    _DICE.pop(match.code, None)
     await session.flush()
     await session.refresh(match, attribute_names=["seats"])
     return _summary(match, await _seat_infos(session, match))
@@ -291,7 +318,56 @@ async def delete_match(
     match.status = MatchStatus.ABANDONED
     _CHAT.pop(match.code, None)
     _PENDING.pop(match.code, None)
+    _DICE.pop(match.code, None)
     return {"ok": True}
+
+
+@router.get("/{code}/dice", response_model=DiceState)
+async def get_dice(
+    code: str,
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    match = await _load_room(session, code)
+    return _dice_state(match.code)
+
+
+@router.post("/{code}/dice", response_model=DiceState)
+async def roll_dice(
+    code: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Roll the fun lobby die (server-side, rate-limited) and return the ranking."""
+    match = await _load_room(session, code)
+    in_room = any(s.user_id == user.id for s in match.seats) or any(
+        p["user_id"] == user.id for p in _PENDING.get(match.code, [])
+    )
+    if not in_room:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Join the room to play")
+
+    now = time.time()
+    room = _DICE.setdefault(match.code, {})
+    me = room.get(user.id)
+    if me is not None and now - me["last_at"] < DICE_COOLDOWN:
+        wait = math.ceil(DICE_COOLDOWN - (now - me["last_at"]))
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, f"Slow down — {wait}s to go"
+        )
+
+    value = random.randint(1, 6)
+    if me is None:
+        me = {
+            "user_id": user.id, "name": user.first_name or "Player",
+            "rolls": 0, "total": 0, "best": 0, "last_value": 0, "last_at": 0.0,
+        }
+        room[user.id] = me
+    me["rolls"] += 1
+    me["total"] += value
+    me["best"] = max(me["best"], value)
+    me["last_value"] = value
+    me["last_at"] = now
+    return _dice_state(match.code)
 
 
 @router.get("/{code}/chat", response_model=list[ChatMessage])
