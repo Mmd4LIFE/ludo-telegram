@@ -131,6 +131,8 @@ export const api = {
     req<MatchSummary>("POST", `/api/matches/${code}/accept`, { user_id, color }),
   rejectJoiner: (code: string, user_id: number) =>
     req<MatchSummary>("POST", `/api/matches/${code}/reject`, { user_id }),
+  setColor: (code: string, user_id: number, color: string) =>
+    req<MatchSummary>("POST", `/api/matches/${code}/color`, { user_id, color }),
   startMatch: (code: string) => req<MatchSummary>("POST", `/api/matches/${code}/start`),
   deleteMatch: (code: string) => req<{ ok: boolean }>("DELETE", `/api/matches/${code}`),
   getDice: (code: string) => req<DiceState>("GET", `/api/matches/${code}/dice`),

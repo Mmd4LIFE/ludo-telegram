@@ -95,6 +95,11 @@ class RejectJoinerRequest(BaseModel):
     user_id: int
 
 
+class SetColorRequest(BaseModel):
+    user_id: int     # seated player to recolour (the host may recolour themselves)
+    color: str       # RED | GREEN | YELLOW | BLUE
+
+
 class JoinMatchRequest(BaseModel):
     code: str
 

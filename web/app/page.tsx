@@ -431,7 +431,7 @@ function WaitingRoom({
   const [dice, setDice] = useState<DiceState | null>(null);
   const [rolled, setRolled] = useState<number | null>(null);
   const [coolUntil, setCoolUntil] = useState(0);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const [editingColor, setEditingColor] = useState<number | null>(null);
 
   // cooldown ticker (only while a cooldown is actually running)
   const [, tickCool] = useState(0);
@@ -441,10 +441,6 @@ function WaitingRoom({
     return () => clearInterval(id);
   }, [coolUntil]);
   const coolLeft = Math.max(0, (coolUntil - Date.now()) / 1000);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ block: "end" });
-  }, [chat.length]);
 
   // Poll the room: seats, pending requests, chat, dice — and follow the host in.
   useEffect(() => {
@@ -534,44 +530,88 @@ function WaitingRoom({
 
   return (
     <Shell>
-      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <ArrowLeft className="size-4" /> Back
-      </button>
-
-      <Card className="text-center">
-        <SectionLabel>Room code</SectionLabel>
-        <div className="mt-2 text-4xl font-extrabold tracking-[0.3em] text-primary">{room.code}</div>
-        <div className="mt-3 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 lb-spin" />
-          {isHost
-            ? `${seats.length}/4 seated`
-            : iAmSeated
-              ? "Waiting for the host to start…"
-              : "Waiting for the host to accept you…"}
-        </div>
-      </Card>
+      {/* top bar — the code lives here as a tag rather than eating a whole card */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground"
+        >
+          <ArrowLeft className="size-4" /> Back
+        </button>
+        <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-bold tracking-[0.2em] text-primary ring-1 ring-white/10">
+          {room.code}
+        </span>
+      </div>
 
       {err && (
         <div className="rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">{err}</div>
       )}
 
       <Card>
-        <SectionLabel>Players</SectionLabel>
+        <div className="flex items-baseline justify-between gap-2">
+          <SectionLabel>Players</SectionLabel>
+          <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <Loader2 className="size-3 lb-spin" />
+            {isHost
+              ? `${seats.length}/4 seated`
+              : iAmSeated
+                ? "waiting for the host to start"
+                : "waiting to be accepted"}
+          </span>
+        </div>
+        {isHost && seats.length > 0 && (
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            Tap a colour dot to change it — yours included.
+          </p>
+        )}
         <div className="mt-2.5 flex flex-col gap-2.5">
           {seats.length === 0 && (
             <div className="text-xs text-muted-foreground">No one seated yet.</div>
           )}
           {seats.map((s) => (
-            <div key={s.seat_index} className="flex items-center gap-3">
-              <span
-                className="size-3.5 shrink-0 rounded-full"
-                style={{ background: COLOR_HEX[s.color] }}
-              />
-              <span className="flex-1 truncate text-sm font-semibold">{s.name}</span>
-              {s.user_id === profile.id && (
-                <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary">
-                  YOU
-                </span>
+            <div key={s.seat_index} className="flex flex-col gap-2">
+              <div className="flex items-center gap-3">
+                <button
+                  disabled={!isHost || busy}
+                  onClick={() =>
+                    setEditingColor(editingColor === s.user_id ? null : s.user_id)
+                  }
+                  className={cn(
+                    "size-4 shrink-0 rounded-full transition",
+                    isHost && "ring-2 ring-white/20 active:scale-90"
+                  )}
+                  style={{ background: COLOR_HEX[s.color] }}
+                  aria-label={`colour ${s.color}`}
+                />
+                <span className="flex-1 truncate text-sm font-semibold">{s.name}</span>
+                {s.user_id === profile.id && (
+                  <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary">
+                    YOU
+                  </span>
+                )}
+              </div>
+              {isHost && editingColor === s.user_id && s.user_id !== null && (
+                <div className="flex items-center gap-2 pl-7">
+                  {["RED", "GREEN", "YELLOW", "BLUE"].map((c) => (
+                    <button
+                      key={c}
+                      disabled={busy}
+                      aria-label={c}
+                      onClick={() =>
+                        guard(async () => {
+                          haptic("light");
+                          setSummary(await api.setColor(room.code, s.user_id!, c));
+                          setEditingColor(null);
+                        })
+                      }
+                      className={cn(
+                        "size-7 rounded-full transition active:scale-90",
+                        s.color === c ? "ring-2 ring-white" : "ring-1 ring-white/20"
+                      )}
+                      style={{ background: COLOR_HEX[c] }}
+                    />
+                  ))}
+                </div>
               )}
             </div>
           ))}
@@ -636,14 +676,11 @@ function WaitingRoom({
       {/* chat — Telegram-style: yours on the right, others on the left */}
       <Card>
         <SectionLabel>Room chat</SectionLabel>
-        {/* fixed frame so the lobby layout never jumps; mt-auto pins messages to the
-            bottom (Telegram-style) so a near-empty chat isn't stuck at the top */}
-        <div className="no-scrollbar mt-2 flex h-44 flex-col overflow-y-auto">
-          <div className="mt-auto flex flex-col gap-2">
-          {chat.length === 0 && (
-            <div className="text-xs text-muted-foreground">Say hi while you wait.</div>
-          )}
-          {chat.map((m) => {
+        {/* Fixed frame, bottom-anchored like Telegram: flex-col-reverse makes the first
+            DOM child sit on the floor and keeps the view stuck to the newest message,
+            so an empty or short chat rests at the bottom instead of the top. */}
+        <div className="no-scrollbar mt-2 flex h-44 flex-col-reverse gap-2 overflow-y-auto">
+          {[...chat].reverse().map((m) => {
             const mine = m.user_id === profile.id;
             return (
               <div
@@ -676,8 +713,9 @@ function WaitingRoom({
               </div>
             );
           })}
-          <div ref={chatEndRef} />
-          </div>
+          {chat.length === 0 && (
+            <div className="text-xs text-muted-foreground">Say hi while you wait.</div>
+          )}
         </div>
         <div className="mt-2 flex gap-2">
           <input

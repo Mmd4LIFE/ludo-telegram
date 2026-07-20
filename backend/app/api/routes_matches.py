@@ -29,6 +29,7 @@ from app.schemas import (
     PendingJoiner,
     RejectJoinerRequest,
     SeatInfo,
+    SetColorRequest,
     SendChatRequest,
 )
 
@@ -275,6 +276,41 @@ async def reject_joiner(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the host can manage players")
     pend = _PENDING.get(match.code, [])
     _PENDING[match.code] = [p for p in pend if p["user_id"] != body.user_id]
+    return _summary(match, await _seat_infos(session, match))
+
+
+@router.post("/{code}/color", response_model=MatchSummary)
+async def set_color(
+    code: str,
+    body: SetColorRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Host-only: (re)assign a seated player's colour — including the host's own.
+
+    If the requested colour already belongs to someone else the two simply swap, so the
+    four colours always stay distinct without the host having to shuffle manually.
+    """
+    match = await _load_room(session, code)
+    if match.created_by != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the host can set colours")
+    if match.status is not MatchStatus.WAITING:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Game already started")
+
+    colour = body.color.upper()
+    if colour not in {c.name for c in _COLORS}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown colour")
+
+    target = next((s for s in match.seats if s.user_id == body.user_id), None)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That player is not seated here")
+    if target.color != colour:
+        holder = next((s for s in match.seats if s.color == colour), None)
+        if holder is not None:
+            holder.color = target.color   # swap so colours stay unique
+        target.color = colour
+        await session.flush()
+        await session.refresh(match, attribute_names=["seats"])
     return _summary(match, await _seat_infos(session, match))
 
 

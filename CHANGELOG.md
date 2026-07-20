@@ -3,6 +3,13 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.2.2 — Room tweaks
+- The host picks the colours: tap any player's colour dot to change it — including your
+  own, so you're no longer stuck as red. Swap freely before you start.
+- Tidier room: the code now sits as a small tag in the top bar and the player list is
+  front and centre.
+- Chat messages now rest on the floor of the chat box, filling upward as they arrive.
+
 ## 0.2.1 — Fixes
 - Roll a six you can't play? You keep the reward — you still get another roll.
 - Room chat now sits at the bottom and fills upward, the way a chat should.
