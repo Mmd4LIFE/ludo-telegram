@@ -3,6 +3,9 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.2.6 — Board polish
+- The white home panel now sits snugly around the four tokens instead of a loose box.
+
 ## 0.2.5 — New navigation
 - A bottom bar to get around, with Play front and centre.
 - A Me tab with your profile and record. Shop, Friends and Ranks are on the way.

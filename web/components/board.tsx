@@ -75,6 +75,30 @@ const YARD: Record<string, { ox: number; oy: number; slots: [number, number][] }
   BLUE: { ox: 0, oy: 9, slots: [[2, 10], [4, 10], [2, 12], [4, 12]] },
 };
 
+// --- home panel tuning ------------------------------------------------------
+// TOKEN_R  : token radius, in cells.
+// HOME_PAD : white gap left around the tokens, in cells. Smaller = tighter panel.
+// The white "home" panel is derived from the yard's slots (homePanel below) rather
+// than hardcoded, so it always wraps exactly around the four tokens — move the slots
+// in YARD and the border follows.
+const TOKEN_R = 0.34;
+const HOME_PAD = 0.16;
+
+function homePanel(slots: [number, number][]) {
+  const cs = slots.map(([c]) => c);
+  const rs = slots.map(([, r]) => r);
+  const x0 = Math.min(...cs) + 0.5 - TOKEN_R - HOME_PAD;
+  const x1 = Math.max(...cs) + 0.5 + TOKEN_R + HOME_PAD;
+  const y0 = Math.min(...rs) + 0.5 - TOKEN_R - HOME_PAD;
+  const y1 = Math.max(...rs) + 0.5 + TOKEN_R + HOME_PAD;
+  return {
+    x: x0 * CELL,
+    y: y0 * CELL,
+    width: (x1 - x0) * CELL,
+    height: (y1 - y0) * CELL,
+  };
+}
+
 const SAFE = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
 const START_ABS = new Set(Object.values(START_OFFSET));
 
@@ -153,10 +177,11 @@ export default function Board({
         {Object.entries(YARD).map(([col, y]) => (
           <g key={col}>
             <rect x={y.ox * CELL} y={y.oy * CELL} width={6 * CELL} height={6 * CELL} rx={12} fill={COLORS[col]} />
-            <rect x={(y.ox + 1) * CELL} y={(y.oy + 1) * CELL} width={4 * CELL} height={4 * CELL} rx={10} fill="#ffffff" />
+            {/* the white home panel — sized from the slots so it hugs the tokens */}
+            <rect {...homePanel(y.slots)} rx={10} fill="#ffffff" />
             {y.slots.map(([c, r], i) => {
               const [cx, cy] = px(c, r);
-              return <circle key={i} cx={cx} cy={cy} r={CELL * 0.34} fill={COLOR_SOFT[col]} stroke={COLORS[col]} strokeWidth={2} />;
+              return <circle key={i} cx={cx} cy={cy} r={CELL * TOKEN_R} fill={COLOR_SOFT[col]} stroke={COLORS[col]} strokeWidth={2} />;
             })}
           </g>
         ))}
