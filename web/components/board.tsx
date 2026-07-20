@@ -8,7 +8,9 @@
 // so captures read correctly. The whole board is rotated k·90° about its centre so the
 // viewer's yard is at the bottom; safe-square stars are SVG polygons kept upright.
 
+import { useEffect, useState } from "react";
 import { GameState, LegalMove } from "@/lib/ws";
+import { PIPS, skinOf } from "@/lib/skins";
 
 const CELL = 34;
 const SIZE = CELL * 15;
@@ -131,12 +133,22 @@ export default function Board({
   legal,
   mySeat,
   myColor,
+  seatNames,
+  seatLevels,
+  seatDice,
+  seatSkins,
+  clock,
   onMove,
 }: {
   state: GameState;
   legal: LegalMove[];
   mySeat: number | null;
   myColor: string | null;
+  seatNames: Record<string, string>;
+  seatLevels: Record<string, number>;
+  seatDice: Record<string, number>;
+  seatSkins: Record<string, string>;
+  clock: { deadline: number | null; now: number; recvAt: number; turnSeconds: number } | null;
   onMove: (tokenIndex: number) => void;
 }) {
   const movable = new Set(legal.map((m) => m.token_index));
@@ -314,7 +326,161 @@ export default function Board({
             </g>
           );
         })}
+
+        {/* per-player HUD: their die, name, level, and the turn clock draining */}
+        {state.players.map((p, seat) => {
+          const yard = YARD[p.color];
+          if (!yard) return null;
+          const { cx, cy, r } = homeCircle(yard.slots);
+          const name = seatNames[String(seat)] ?? "";
+          const level = seatLevels[String(seat)] ?? 1;
+          const die = seatDice[String(seat)] ?? null;
+          const skin = skinOf(seatSkins[String(seat)]);
+          const isTurn = state.current === seat && state.phase !== "finished";
+
+          // Offsets are expressed on SCREEN axes then un-rotated into board space, so a
+          // name always sits under its own home whichever way the board is turned.
+          const un = (dx: number, dy: number): [number, number] => {
+            const t = (rot * Math.PI) / 180;
+            return [dx * Math.cos(t) + dy * Math.sin(t), -dx * Math.sin(t) + dy * Math.cos(t)];
+          };
+          const [nx, ny] = un(0, r + CELL * 0.52);
+          const [lx, ly] = un(-r * 0.72, -r * 0.72);
+          // the die sits in the corner of the yard facing the middle of the board
+          const dx = Math.sign(MID - cx) || 1;
+          const dy = Math.sign(MID - cy) || 1;
+          const dieSize = CELL * 1.05;
+          const dieX = cx + dx * (r + CELL * 0.78);
+          const dieY = cy + dy * (r + CELL * 0.78);
+
+          return (
+            <g key={`hud-${seat}`} pointerEvents="none">
+              {isTurn && clock?.deadline ? (
+                <TurnRing cx={cx} cy={cy} r={r + CELL * 0.26} colour={COLORS[p.color]} clock={clock} />
+              ) : null}
+
+              {die != null && (
+                <BoardDie x={dieX} y={dieY} size={dieSize} value={die} skin={skin} rot={rot} />
+              )}
+
+              <g transform={`rotate(${-rot} ${cx + nx} ${cy + ny})`}>
+                <text
+                  x={cx + nx}
+                  y={cy + ny}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={CELL * 0.42}
+                  fontWeight={700}
+                  fill={seat === mySeat ? COLORS[p.color] : "#5b6478"}
+                >
+                  {seat === mySeat ? `${name} (you)` : name}
+                </text>
+              </g>
+
+              <g transform={`rotate(${-rot} ${cx + lx} ${cy + ly})`}>
+                <circle cx={cx + lx} cy={cy + ly} r={CELL * 0.32} fill={COLORS[p.color]} />
+                <text
+                  x={cx + lx}
+                  y={cy + ly}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={CELL * 0.34}
+                  fontWeight={700}
+                  fill="#ffffff"
+                >
+                  {level}
+                </text>
+              </g>
+            </g>
+          );
+        })}
       </g>
     </svg>
+  );
+}
+
+/** The current player's clock, drawn as a ring that empties around their home. Owns its
+ *  own ticking state so the rest of the board never re-renders on the timer. */
+function TurnRing({
+  cx,
+  cy,
+  r,
+  colour,
+  clock,
+}: {
+  cx: number;
+  cy: number;
+  r: number;
+  colour: string;
+  clock: { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
+}) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 250);
+    return () => clearInterval(id);
+  }, [clock.deadline]);
+  if (!clock.deadline) return null;
+  const serverNow = clock.now + (Date.now() / 1000 - clock.recvAt);
+  const left = Math.max(0, clock.deadline - serverNow);
+  const pct = Math.max(0, Math.min(100, (left / clock.turnSeconds) * 100));
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={r}
+      fill="none"
+      stroke={left <= 5 ? "#e5484d" : colour}
+      strokeWidth={CELL * 0.14}
+      strokeLinecap="round"
+      pathLength={100}
+      strokeDasharray="100"
+      strokeDashoffset={100 - pct}
+      transform={`rotate(-90 ${cx} ${cy})`}
+      opacity={0.9}
+    />
+  );
+}
+
+/** A player's own die, rendered in their skin. */
+function BoardDie({
+  x,
+  y,
+  size,
+  value,
+  skin,
+  rot,
+}: {
+  x: number;
+  y: number;
+  size: number;
+  value: number;
+  skin: { face: string; pip: string; edge: string };
+  rot: number;
+}) {
+  const half = size / 2;
+  const pips = PIPS[value] ?? [];
+  const step = size / 3;
+  return (
+    <g transform={`rotate(${-rot} ${x} ${y})`}>
+      <rect
+        x={x - half}
+        y={y - half}
+        width={size}
+        height={size}
+        rx={size * 0.22}
+        fill={skin.face}
+        stroke={skin.edge}
+        strokeWidth={1.5}
+      />
+      {pips.map(([c, r], i) => (
+        <circle
+          key={i}
+          cx={x - half + step * (c + 0.5)}
+          cy={y - half + step * (r + 0.5)}
+          r={size * 0.082}
+          fill={skin.pip}
+        />
+      ))}
+    </g>
   );
 }

@@ -62,13 +62,18 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
         if seated_ids:
             rows = (
                 await session.execute(
-                    select(User.id, User.first_name).where(User.id.in_(seated_ids))
+                    select(User.id, User.first_name, User.level, User.dice_skin).where(
+                        User.id.in_(seated_ids)
+                    )
                 )
             ).all()
-            id_name = {rid: (fn or "Player") for rid, fn in rows}
+            info = {rid: (fn or "Player", lvl or 1, skin or "classic") for rid, fn, lvl, skin in rows}
             for seat, uid in rt.seat_user.items():
-                if uid and uid in id_name:
-                    rt.seat_names[seat] = id_name[uid]
+                if uid and uid in info:
+                    name, level, skin = info[uid]
+                    rt.seat_names[seat] = name
+                    rt.seat_levels[seat] = level
+                    rt.seat_skins[seat] = skin
         match_id = match.id
         match_code = match.code
 

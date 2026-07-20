@@ -31,6 +31,7 @@ class UserProfile(BaseModel):
     # bot @username, so the Mini App can build t.me/<bot>?start=rm-<code> invite links.
     bot_username: str = ""
     is_admin: bool = False
+    dice_skin: str = "classic"
 
     @classmethod
     def from_user(cls, u) -> "UserProfile":
@@ -48,7 +49,12 @@ class UserProfile(BaseModel):
             games_won=u.games_won,
             bot_username=get_bot_username(),
             is_admin=u.telegram_id in settings.admin_ids,
+            dice_skin=getattr(u, "dice_skin", "classic") or "classic",
         )
+
+
+class SetDiceSkinRequest(BaseModel):
+    skin: str
 
 
 class TokenResponse(BaseModel):

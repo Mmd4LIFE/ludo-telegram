@@ -34,6 +34,9 @@ class User(Base, TimestampMixin):
     games_played: Mapped[int] = mapped_column(Integer, default=0)
     games_won: Mapped[int] = mapped_column(Integer, default=0)
 
+    # cosmetics — which die face this player rolls with
+    dice_skin: Mapped[str] = mapped_column(String(16), default="classic", server_default="classic")
+
     # flags / presence
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)

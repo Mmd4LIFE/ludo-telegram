@@ -48,6 +48,7 @@ import { Button } from "@/components/ui/button";
 import { Card, SectionLabel } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import Board from "@/components/board";
+import { DICE_SKINS, PIPS, skinOf } from "@/lib/skins";
 
 const COLOR_HEX: Record<string, string> = {
   RED: "#e5484d",
@@ -109,6 +110,9 @@ function Home() {
   const [legal, setLegal] = useState<LegalMove[]>([]);
   const [seatUser, setSeatUser] = useState<Record<string, number | null>>({});
   const [seatNames, setSeatNames] = useState<Record<string, string>>({});
+  const [seatLevels, setSeatLevels] = useState<Record<string, number>>({});
+  const [seatSkins, setSeatSkins] = useState<Record<string, string>>({});
+  const [seatDice, setSeatDice] = useState<Record<string, number>>({});
   const [clock, setClock] = useState<Clock | null>(null);
   const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
     votes: [],
@@ -129,6 +133,9 @@ function Home() {
         setLegal(p.legal_moves);
         setSeatUser(p.seat_user);
         setSeatNames(p.seat_names ?? {});
+        setSeatLevels(p.seat_levels ?? {});
+        setSeatSkins(p.seat_skins ?? {});
+        setSeatDice(p.seat_last_die ?? {});
         setClock({
           deadline: p.deadline,
           now: p.now,
@@ -247,6 +254,9 @@ function Home() {
         profile={profile}
         seatUser={seatUser}
         seatNames={seatNames}
+        seatLevels={seatLevels}
+        seatSkins={seatSkins}
+        seatDice={seatDice}
         clock={clock}
         rematch={rematch}
         sock={sockRef.current}
@@ -277,7 +287,9 @@ function Home() {
           onJoin={joinFromList}
         />
       )}
-      {view === "me" && <MeScreen profile={profile} onAdmin={() => setShowAdmin(true)} />}
+      {view === "me" && (
+        <MeScreen profile={profile} onAdmin={() => setShowAdmin(true)} onProfile={setProfile} />
+      )}
       {view === "shop" && <ComingSoon title="Shop" />}
       {view === "friends" && <ComingSoon title="Friends" />}
       {view === "ranks" && <ComingSoon title="Ranks" />}
@@ -991,6 +1003,9 @@ function LiveMatch({
   profile,
   seatUser,
   seatNames,
+  seatLevels,
+  seatSkins,
+  seatDice,
   clock,
   rematch,
   sock,
@@ -1002,6 +1017,9 @@ function LiveMatch({
   profile: Profile;
   seatUser: Record<string, number | null>;
   seatNames: Record<string, string>;
+  seatLevels: Record<string, number>;
+  seatSkins: Record<string, string>;
+  seatDice: Record<string, number>;
   clock: Clock | null;
   rematch: { votes: number[]; humanIds: number[] };
   sock: MatchSocket | null;
@@ -1035,34 +1053,7 @@ function LiveMatch({
         </Button>
       </div>
 
-      {/* players */}
-      <div className="flex gap-2">
-        {state.players.map((p, seat) => {
-          const home = p.tokens.filter((t) => t >= 56).length;
-          const isMe = seat === mySeat;
-          const active = seat === state.current && !finished;
-          return (
-            <div
-              key={seat}
-              className={cn(
-                "flex-1 rounded-2xl bg-card px-2 py-2 text-center ring-1 transition",
-                active ? "ring-2 scale-[1.03]" : "ring-white/10"
-              )}
-              style={active ? { boxShadow: `0 0 0 2px ${COLOR_HEX[p.color]}` } : undefined}
-            >
-              <div className="mx-auto size-4 rounded-full" style={{ background: COLOR_HEX[p.color] }} />
-              <div className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-                {isMe ? "YOU" : seatNames[String(seat)] || (seatUser[String(seat)] ? "Player" : "BOT")}
-              </div>
-              <div className="flex items-center justify-center gap-1 text-[11px] font-bold tabular-nums">
-                <HomeIcon className="size-3 text-muted-foreground" /> {home}/4
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {finished ? (
+      {finished && (
         /* end-of-game broadcast — winner, standings, rematch */
         <Card className="text-center lb-pop">
           <Trophy className="mx-auto size-8 text-primary" />
@@ -1100,28 +1091,21 @@ function LiveMatch({
             </div>
           )}
         </Card>
-      ) : (
-        /* turn banner — fixed height so the board never shifts */
-        <div
-          className="rounded-2xl py-2.5 text-center text-sm font-bold ring-1 ring-white/10"
-          style={{ background: `${COLOR_HEX[currentColor]}22` }}
-        >
-          {noMoves
-            ? `No moves for ${currentColor} — passing…`
-            : myTurn
-              ? state.phase === "roll"
-                ? "Your turn — roll the die!"
-                : "Your turn — tap a glowing token"
-              : `${currentColor}'s turn…`}
-        </div>
       )}
 
+      {/* The board carries everything now: each player's name, level, die and the
+          draining turn ring — so there's no player strip or turn banner above it. */}
       <Card className="p-2">
         <Board
           state={state}
           legal={legal}
           mySeat={mySeat}
           myColor={mySeat !== null ? state.players[mySeat]?.color ?? null : null}
+          seatNames={seatNames}
+          seatLevels={seatLevels}
+          seatSkins={seatSkins}
+          seatDice={seatDice}
+          clock={clock}
           onMove={(ti) => {
             haptic("light");
             sock?.move(ti);
@@ -1129,10 +1113,8 @@ function LiveMatch({
         />
       </Card>
 
-      {/* dice + roll (the button's gold fill drains as your turn clock runs out) */}
       {!finished && (
-        <div className="flex items-center justify-between gap-3">
-          <RollingDie die={state.die} turn={state.turn} />
+        <>
           <RollButton
             active={myTurn && state.phase === "roll"}
             clock={clock}
@@ -1141,7 +1123,16 @@ function LiveMatch({
               sock?.roll();
             }}
           />
-        </div>
+          <p className="text-center text-[11px] text-muted-foreground">
+            {noMoves
+              ? `No moves for ${currentColor} — passing…`
+              : myTurn
+                ? state.phase === "roll"
+                  ? "Your turn"
+                  : "Tap a glowing token"
+                : `${currentColor}'s turn…`}
+          </p>
+        </>
       )}
     </Shell>
   );
@@ -1335,7 +1326,41 @@ function ComingSoon({ title }: { title: string }) {
   );
 }
 
-function MeScreen({ profile, onAdmin }: { profile: Profile; onAdmin: () => void }) {
+function DieFace({ value, skin, size }: { value: number; skin: string; size: number }) {
+  const sk = skinOf(skin);
+  const step = size / 3;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <rect
+        width={size}
+        height={size}
+        rx={size * 0.22}
+        fill={sk.face}
+        stroke={sk.edge}
+        strokeWidth={1.5}
+      />
+      {(PIPS[value] ?? []).map(([c, r], i) => (
+        <circle
+          key={i}
+          cx={step * (c + 0.5)}
+          cy={step * (r + 0.5)}
+          r={size * 0.082}
+          fill={sk.pip}
+        />
+      ))}
+    </svg>
+  );
+}
+
+function MeScreen({
+  profile,
+  onAdmin,
+  onProfile,
+}: {
+  profile: Profile;
+  onAdmin: () => void;
+  onProfile: (p: Profile) => void;
+}) {
   const initial = (profile.first_name || "P").slice(0, 1).toUpperCase();
   const winRate = profile.games_played
     ? Math.round((profile.games_won / profile.games_played) * 100)
@@ -1376,6 +1401,38 @@ function MeScreen({ profile, onAdmin }: { profile: Profile; onAdmin: () => void 
           </div>
         ))}
       </div>
+
+      <Card>
+        <SectionLabel>Your dice</SectionLabel>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          This is the die you roll on the board — everyone sees it.
+        </p>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {Object.values(DICE_SKINS).map((sk) => {
+            const active = profile.dice_skin === sk.id;
+            return (
+              <button
+                key={sk.id}
+                onClick={async () => {
+                  haptic("light");
+                  try {
+                    onProfile(await api.setDiceSkin(sk.id));
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1.5 rounded-2xl bg-secondary/60 p-3 transition active:scale-[0.97]",
+                  active ? "ring-2 ring-primary" : "ring-1 ring-white/10"
+                )}
+              >
+                <DieFace value={5} skin={sk.id} size={38} />
+                <span className="text-[10px] font-bold text-muted-foreground">{sk.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
 
       {profile.is_admin && (
         <Button variant="secondary" className="w-full" onClick={onAdmin}>

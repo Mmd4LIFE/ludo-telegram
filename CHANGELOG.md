@@ -3,6 +3,15 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.3.0 — The board tells the story
+- Every player now lives on the board: their name, level and their own die sit beside
+  their home, so you can see the whole table at a glance.
+- Whoever's turn it is has a ring draining around their home — that's the clock.
+- Because of that, the player strip and turn banner are gone: it's just the board and
+  the Roll button now.
+- Pick your dice skin in the Me tab — Classic, Gold, Night, Mint, Ruby or Ocean — and
+  everyone sees you roll it.
+
 ## 0.2.6 — Board polish
 - Lighter homes: each corner is now white with its colour carried by the ring and tokens.
 - A clean white rim now frames the board around the four home blocks.

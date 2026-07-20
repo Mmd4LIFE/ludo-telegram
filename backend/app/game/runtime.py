@@ -59,11 +59,16 @@ class MatchRuntime:
         # seat index -> user_id (None = house bot)
         self.seat_user: dict[int, int | None] = {}
         self.seat_is_bot: dict[int, bool] = {}
-        self.seat_names: dict[int, str] = {}  # seat -> display name (filled on connect)
+        self.seat_names: dict[int, str] = {}   # seat -> display name (filled on connect)
+        self.seat_levels: dict[int, int] = {}  # seat -> level (filled on connect)
+        self.seat_skins: dict[int, str] = {}   # seat -> dice skin (filled on connect)
+        self.seat_last_die: dict[int, int] = {}  # seat -> the face they last rolled
         for s in match.seats:
             self.seat_user[s.seat_index] = s.user_id
             self.seat_is_bot[s.seat_index] = s.is_bot
             self.seat_names[s.seat_index] = "Bot" if s.is_bot else "Player"
+            self.seat_levels[s.seat_index] = 1
+            self.seat_skins[s.seat_index] = "classic"
 
         self.state: GameState = (
             GameState.from_dict(match.state)
@@ -167,6 +172,8 @@ class MatchRuntime:
             else:
                 await self._think()
             register_roll(self.state, roll_die(self._rng))
+            if self.state.die is not None:
+                self.seat_last_die[seat] = self.state.die
             await self._broadcast()
             await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)  # hold on the die face
             return
@@ -208,6 +215,9 @@ class MatchRuntime:
             "state": self.state.to_dict(),
             "seat_user": {str(k): v for k, v in self.seat_user.items()},
             "seat_names": {str(k): v for k, v in self.seat_names.items()},
+            "seat_levels": {str(k): v for k, v in self.seat_levels.items()},
+            "seat_skins": {str(k): v for k, v in self.seat_skins.items()},
+            "seat_last_die": {str(k): v for k, v in self.seat_last_die.items()},
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
             # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
             "deadline": self._deadline,
