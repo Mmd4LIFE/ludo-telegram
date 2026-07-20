@@ -4,7 +4,7 @@ Player-facing notes. Keep this friendly and free of internal/technical reference
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
 ## 0.2.6 — Board polish
-- Each home is now marked by a clean white ring around its four tokens.
+- Lighter homes: each corner is now white with its colour carried by the ring and tokens.
 - A clean white rim now frames the board around the four home blocks.
 
 ## 0.2.5 — New navigation

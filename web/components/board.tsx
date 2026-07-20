@@ -91,6 +91,10 @@ const HOME_RING = 0.16;
 // framing the board.
 const BOARD_BG = "#ffffff";
 const YARD_INSET = 0.22;
+// Home blocks are white with a coloured outline; the colour is carried by the ring and
+// the tokens instead of a solid block.
+const YARD_BG = "#ffffff";
+const YARD_EDGE = 2;
 
 // The white home is a disc centred on the four tokens, just big enough to hold them
 // (their ring radius + a token + HOME_PAD). Derived from the slots, so it follows if
@@ -189,13 +193,15 @@ export default function Board({
               width={(6 - 2 * YARD_INSET) * CELL}
               height={(6 - 2 * YARD_INSET) * CELL}
               rx={12}
-              fill={COLORS[col]}
+              fill={YARD_BG}
+              stroke={COLORS[col]}
+              strokeWidth={YARD_EDGE}
             />
-            {/* the white home — a ring encircling the four tokens (they sit on the yard) */}
+            {/* the home ring — carries the colour, encircling the four tokens */}
             <circle
               {...homeCircle(y.slots)}
               fill="none"
-              stroke="#ffffff"
+              stroke={COLORS[col]}
               strokeWidth={HOME_RING * CELL}
             />
             {y.slots.map(([c, r], i) => {
