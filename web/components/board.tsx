@@ -82,6 +82,8 @@ const YARD: Record<string, { ox: number; oy: number; slots: [number, number][] }
 // in YARD and the border follows.
 const TOKEN_R = 0.34;
 const HOME_PAD = 0.16;
+// thickness of the white ring drawn around each home's four tokens, in cells
+const HOME_RING = 0.16;
 
 // Board paper + the white margin left around each coloured home block. The inset is
 // applied on all four sides, but only reads on the outer two — the inner sides sit
@@ -189,8 +191,13 @@ export default function Board({
               rx={12}
               fill={COLORS[col]}
             />
-            {/* the white home — a disc sized from the slots so it hugs the tokens */}
-            <circle {...homeCircle(y.slots)} fill="#ffffff" />
+            {/* the white home — a ring encircling the four tokens (they sit on the yard) */}
+            <circle
+              {...homeCircle(y.slots)}
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth={HOME_RING * CELL}
+            />
             {y.slots.map(([c, r], i) => {
               const [cx, cy] = px(c, r);
               return <circle key={i} cx={cx} cy={cy} r={CELL * TOKEN_R} fill={COLOR_SOFT[col]} stroke={COLORS[col]} strokeWidth={2} />;
