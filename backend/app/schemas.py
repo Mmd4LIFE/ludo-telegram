@@ -69,6 +69,11 @@ class SeatInfo(BaseModel):
     user_id: int | None = None
 
 
+class PendingJoiner(BaseModel):
+    user_id: int
+    name: str
+
+
 class MatchSummary(BaseModel):
     code: str
     status: str
@@ -76,8 +81,31 @@ class MatchSummary(BaseModel):
     seated: int
     is_public: bool
     entry_fee: int
+    created_by: int | None = None   # host user id — only the host may start/delete
     seats: list[SeatInfo] = []
+    pending: list[PendingJoiner] = []   # awaiting the host's approval
+
+
+class AcceptJoinerRequest(BaseModel):
+    user_id: int
+    color: str        # RED | GREEN | YELLOW | BLUE
+
+
+class RejectJoinerRequest(BaseModel):
+    user_id: int
 
 
 class JoinMatchRequest(BaseModel):
     code: str
+
+
+# --- room lobby chat ---------------------------------------------------------
+class ChatMessage(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    text: str
+
+
+class SendChatRequest(BaseModel):
+    text: str

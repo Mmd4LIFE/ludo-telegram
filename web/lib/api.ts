@@ -53,6 +53,11 @@ export interface SeatInfo {
   user_id: number | null;
 }
 
+export interface PendingJoiner {
+  user_id: number;
+  name: string;
+}
+
 export interface MatchSummary {
   code: string;
   status: string;
@@ -60,7 +65,16 @@ export interface MatchSummary {
   seated: number;
   is_public: boolean;
   entry_fee: number;
+  created_by: number | null;
   seats: SeatInfo[];
+  pending: PendingJoiner[];
+}
+
+export interface ChatMessage {
+  id: number;
+  user_id: number;
+  name: string;
+  text: string;
 }
 
 // Authenticate via Telegram initData; falls back to dev login in a plain browser.
@@ -93,4 +107,13 @@ export const api = {
   }) => req<MatchSummary>("POST", "/api/matches", opts),
   joinMatch: (code: string) =>
     req<MatchSummary>("POST", "/api/matches/join", { code }),
+  acceptJoiner: (code: string, user_id: number, color: string) =>
+    req<MatchSummary>("POST", `/api/matches/${code}/accept`, { user_id, color }),
+  rejectJoiner: (code: string, user_id: number) =>
+    req<MatchSummary>("POST", `/api/matches/${code}/reject`, { user_id }),
+  startMatch: (code: string) => req<MatchSummary>("POST", `/api/matches/${code}/start`),
+  deleteMatch: (code: string) => req<{ ok: boolean }>("DELETE", `/api/matches/${code}`),
+  getChat: (code: string) => req<ChatMessage[]>("GET", `/api/matches/${code}/chat`),
+  sendChat: (code: string, text: string) =>
+    req<ChatMessage[]>("POST", `/api/matches/${code}/chat`, { text }),
 };

@@ -51,6 +51,11 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
         if user is None:
             await websocket.close(code=4401)
             return
+        # A game needs 2+ seats; opening a socket on a one-seat room used to blow up in
+        # initial_state() and leave the client hanging on "Joining game…". Refuse cleanly.
+        if sum(1 for s in match.seats if s.user_id is not None or s.is_bot) < 2:
+            await websocket.close(code=4409)
+            return
         rt = await manager.get_runtime(session, match)
         # refresh joiner names (picks up players who joined after the runtime started)
         seated_ids = [uid for uid in rt.seat_user.values() if uid]

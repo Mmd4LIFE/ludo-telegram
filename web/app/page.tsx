@@ -18,8 +18,9 @@ import {
   Coins,
   Home as HomeIcon,
   AlertTriangle,
+  Trash2,
 } from "lucide-react";
-import { api, authenticate, MatchSummary, Profile } from "@/lib/api";
+import { api, authenticate, ChatMessage, MatchSummary, Profile } from "@/lib/api";
 import {
   getInitData,
   haptic,
@@ -149,7 +150,10 @@ function Home() {
           const code = sp.slice(3).toUpperCase();
           api
             .joinMatch(code)
-            .then(() => enterMatch(code))
+            .then((m) => {
+              if (m.status === "playing") enterMatch(code);
+              else setRoom({ code, host: m.created_by === p.id });
+            })
             .catch((e) => setError(String(e)));
         }
       })
@@ -187,8 +191,11 @@ function Home() {
     setBusy(true);
     haptic("light");
     try {
-      await api.joinMatch(code);
-      enterMatch(code);
+      const m = await api.joinMatch(code);
+      // An unstarted room takes you to its lobby (the host must accept + start);
+      // a game already in progress drops you straight onto the board.
+      if (m.status === "playing") enterMatch(code);
+      else setRoom({ code, host: m.created_by === profile?.id });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -416,11 +423,32 @@ function WaitingRoom({
   onBack: () => void;
 }) {
   const [summary, setSummary] = useState<MatchSummary | null>(null);
+  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Poll the room: seats, pending requests, chat — and follow the host into the game.
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      api.getMatch(room.code).then((s) => alive && setSummary(s)).catch(() => {});
+    const load = async () => {
+      try {
+        const s = await api.getMatch(room.code);
+        if (!alive) return;
+        setSummary(s);
+        if (s.status === "playing") return onEnter(room.code);
+        if (s.status === "abandoned") return onBack();
+      } catch {
+        /* transient */
+      }
+      try {
+        const c = await api.getChat(room.code);
+        if (alive) setChat(c);
+      } catch {
+        /* not in the room yet */
+      }
+    };
     load();
     const id = setInterval(load, 2000);
     return () => {
@@ -429,8 +457,25 @@ function WaitingRoom({
     };
   }, [room.code]);
 
-  const seated = summary?.seated ?? 1;
-  const ready = seated >= 2;
+  const isHost = summary ? summary.created_by === profile.id : room.host;
+  const seats = summary?.seats ?? [];
+  const pending = summary?.pending ?? [];
+  const iAmSeated = seats.some((s) => s.user_id === profile.id);
+  const taken = new Set(seats.map((s) => s.color));
+  const freeColors = ["RED", "GREEN", "YELLOW", "BLUE"].filter((c) => !taken.has(c));
+  const canStart = seats.length >= 2;
+
+  const guard = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fn();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const share = () => {
     haptic("light");
@@ -448,46 +493,100 @@ function WaitingRoom({
       share();
     }
   };
+  const send = () =>
+    guard(async () => {
+      const t = draft.trim();
+      if (!t) return;
+      setChat(await api.sendChat(room.code, t));
+      setDraft("");
+    });
 
   return (
     <Shell>
-      <button
-        onClick={onBack}
-        className="flex items-center gap-1.5 text-sm text-muted-foreground"
-      >
+      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-muted-foreground">
         <ArrowLeft className="size-4" /> Back
       </button>
 
       <Card className="text-center">
         <SectionLabel>Room code</SectionLabel>
-        <div className="mt-2 text-4xl font-extrabold tracking-[0.3em] text-primary">
-          {room.code}
-        </div>
+        <div className="mt-2 text-4xl font-extrabold tracking-[0.3em] text-primary">{room.code}</div>
         <div className="mt-3 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 lb-spin" /> Waiting for players · {seated}/4 seated
+          <Loader2 className="size-4 lb-spin" />
+          {isHost
+            ? `${seats.length}/4 seated`
+            : iAmSeated
+              ? "Waiting for the host to start…"
+              : "Waiting for the host to accept you…"}
         </div>
       </Card>
 
-      {summary && summary.seats.length > 0 && (
-        <Card>
-          <SectionLabel>In this room</SectionLabel>
-          <div className="mt-2.5 flex flex-col gap-2.5">
-            {summary.seats.map((s) => (
-              <div key={s.seat_index} className="flex items-center gap-3">
-                <span className="size-3.5 shrink-0 rounded-full" style={{ background: COLOR_HEX[s.color] }} />
-                <span
-                  className={cn(
-                    "truncate text-sm font-semibold",
-                    s.name === "Open" && "font-normal text-muted-foreground"
-                  )}
-                >
-                  {s.name === "Open" ? "Waiting…" : s.name}
+      {err && (
+        <div className="rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">{err}</div>
+      )}
+
+      <Card>
+        <SectionLabel>Players</SectionLabel>
+        <div className="mt-2.5 flex flex-col gap-2.5">
+          {seats.length === 0 && (
+            <div className="text-xs text-muted-foreground">No one seated yet.</div>
+          )}
+          {seats.map((s) => (
+            <div key={s.seat_index} className="flex items-center gap-3">
+              <span
+                className="size-3.5 shrink-0 rounded-full"
+                style={{ background: COLOR_HEX[s.color] }}
+              />
+              <span className="flex-1 truncate text-sm font-semibold">{s.name}</span>
+              {s.user_id === profile.id && (
+                <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary">
+                  YOU
                 </span>
-                {s.user_id === profile.id && (
-                  <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary">
-                    YOU
+              )}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {isHost && pending.length > 0 && (
+        <Card>
+          <SectionLabel>Requests to join</SectionLabel>
+          <div className="mt-2.5 flex flex-col gap-3">
+            {pending.map((p) => (
+              <div key={p.user_id} className="flex flex-col gap-2 rounded-xl bg-secondary/50 p-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="flex-1 truncate text-sm font-semibold">{p.name}</span>
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      guard(async () =>
+                        setSummary(await api.rejectJoiner(room.code, p.user_id))
+                      )
+                    }
+                    className="rounded-lg px-2 py-1 text-xs font-bold text-muted-foreground"
+                  >
+                    Decline
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Give colour
                   </span>
-                )}
+                  {freeColors.map((c) => (
+                    <button
+                      key={c}
+                      disabled={busy}
+                      aria-label={c}
+                      onClick={() =>
+                        guard(async () => {
+                          haptic("medium");
+                          setSummary(await api.acceptJoiner(room.code, p.user_id, c));
+                        })
+                      }
+                      className="size-7 rounded-full ring-2 ring-white/20 transition active:scale-90"
+                      style={{ background: COLOR_HEX[c] }}
+                    />
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -503,19 +602,78 @@ function WaitingRoom({
         </Button>
       </div>
 
-      <Button
-        size="lg"
-        variant={ready ? "win" : "secondary"}
-        className="w-full"
-        disabled={!ready}
-        onClick={() => onEnter(room.code)}
-      >
-        {ready ? "Start game" : "Waiting for one more…"}
-      </Button>
+      <Card>
+        <SectionLabel>Room chat</SectionLabel>
+        <div className="no-scrollbar mt-2 flex max-h-44 flex-col gap-1.5 overflow-y-auto">
+          {chat.length === 0 && (
+            <div className="text-xs text-muted-foreground">Say hi while you wait.</div>
+          )}
+          {chat.map((m) => (
+            <div key={m.id} className="text-sm">
+              <span
+                className={cn(
+                  "font-bold",
+                  m.user_id === profile.id ? "text-primary" : "text-muted-foreground"
+                )}
+              >
+                {m.user_id === profile.id ? "You" : m.name}:
+              </span>{" "}
+              <span className="break-words">{m.text}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex gap-2">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") send();
+            }}
+            placeholder="Message…"
+            maxLength={200}
+            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+          />
+          <Button size="sm" className="h-10" disabled={busy || !draft.trim()} onClick={send}>
+            Send
+          </Button>
+        </div>
+      </Card>
 
-      <p className="text-center text-xs text-muted-foreground">
-        Share the invite — your friends open it in Telegram and drop straight into this room.
-      </p>
+      {isHost ? (
+        <div className="flex flex-col gap-2">
+          <Button
+            size="lg"
+            variant={canStart ? "win" : "secondary"}
+            disabled={!canStart || busy}
+            onClick={() =>
+              guard(async () => {
+                await api.startMatch(room.code);
+                onEnter(room.code);
+              })
+            }
+          >
+            {canStart ? "Start game" : "Need one more player"}
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={busy}
+            onClick={() =>
+              guard(async () => {
+                await api.deleteMatch(room.code);
+                onBack();
+              })
+            }
+          >
+            <Trash2 className="size-4" /> Delete room
+          </Button>
+        </div>
+      ) : (
+        <p className="text-center text-xs text-muted-foreground">
+          {iAmSeated
+            ? "You're in! The host will start the game."
+            : "The host needs to accept you into the room."}
+        </p>
+      )}
     </Shell>
   );
 }
