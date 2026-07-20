@@ -190,7 +190,12 @@ export default function Board({
 
       <g transform={`rotate(${rot} ${MID} ${MID})`}>
         {/* yards */}
-        {Object.entries(YARD).map(([col, y]) => (
+        {Object.entries(YARD).map(([col, y]) => {
+          const seat = state.players.findIndex((p) => p.color === col);
+          const isTurn = seat >= 0 && state.current === seat && state.phase !== "finished";
+          // Your own clock is the Roll button, so only opponents' homes tick.
+          const ticking = isTurn && seat !== mySeat && !!clock?.deadline;
+          return (
           <g key={col}>
             <rect
               x={(y.ox + YARD_INSET) * CELL}
@@ -200,19 +205,29 @@ export default function Board({
               rx={12}
               fill={YARD_BG}
             />
-            {/* the home ring — carries the colour, encircling the four tokens */}
-            <circle
-              {...homeCircle(y.slots)}
-              fill="none"
-              stroke={COLORS[col]}
-              strokeWidth={HOME_RING * CELL}
-            />
+            {/* the home ring — carries the colour, and doubles as that player's clock */}
+            {ticking ? (
+              <TurnRing
+                {...homeCircle(y.slots)}
+                colour={COLORS[col]}
+                width={HOME_RING * CELL}
+                clock={clock!}
+              />
+            ) : (
+              <circle
+                {...homeCircle(y.slots)}
+                fill="none"
+                stroke={COLORS[col]}
+                strokeWidth={HOME_RING * CELL}
+              />
+            )}
             {y.slots.map(([c, r], i) => {
               const [cx, cy] = px(c, r);
               return <circle key={i} cx={cx} cy={cy} r={CELL * TOKEN_R} fill={COLOR_SOFT[col]} stroke={COLORS[col]} strokeWidth={2} />;
             })}
           </g>
-        ))}
+          );
+        })}
 
         {/* track cells */}
         {TRACK.map(([c, r], abs) => {
@@ -355,10 +370,6 @@ export default function Board({
 
           return (
             <g key={`hud-${seat}`} pointerEvents="none">
-              {isTurn && clock?.deadline ? (
-                <TurnRing cx={cx} cy={cy} r={r + CELL * 0.26} colour={COLORS[p.color]} clock={clock} />
-              ) : null}
-
               {die != null && (
                 <BoardDie x={dieX} y={dieY} size={dieSize} value={die} skin={skin} rot={rot} />
               )}
@@ -406,12 +417,14 @@ function TurnRing({
   cy,
   r,
   colour,
+  width,
   clock,
 }: {
   cx: number;
   cy: number;
   r: number;
   colour: string;
+  width: number;
   clock: { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
 }) {
   const [, tick] = useState(0);
@@ -424,20 +437,23 @@ function TurnRing({
   const left = Math.max(0, clock.deadline - serverNow);
   const pct = Math.max(0, Math.min(100, (left / clock.turnSeconds) * 100));
   return (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={r}
-      fill="none"
-      stroke={left <= 5 ? "#e5484d" : colour}
-      strokeWidth={CELL * 0.14}
-      strokeLinecap="round"
-      pathLength={100}
-      strokeDasharray="100"
-      strokeDashoffset={100 - pct}
-      transform={`rotate(-90 ${cx} ${cy})`}
-      opacity={0.9}
-    />
+    <>
+      {/* faint full ring so the home is still outlined as the clock empties */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={colour} strokeWidth={width} opacity={0.18} />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="none"
+        stroke={left <= 5 ? "#e5484d" : colour}
+        strokeWidth={width}
+        strokeLinecap="round"
+        pathLength={100}
+        strokeDasharray="100"
+        strokeDashoffset={100 - pct}
+        transform={`rotate(-90 ${cx} ${cy})`}
+      />
+    </>
   );
 }
 

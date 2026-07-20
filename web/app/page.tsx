@@ -979,7 +979,7 @@ function RollButton({
     <button
       disabled={!active}
       onClick={onRoll}
-      className="relative h-14 flex-1 overflow-hidden rounded-2xl bg-secondary ring-1 ring-white/10 transition active:translate-y-px disabled:opacity-55"
+      className="relative h-14 w-full shrink-0 overflow-hidden rounded-2xl bg-secondary ring-1 ring-white/10 transition active:translate-y-px disabled:opacity-55"
     >
       {/* gold fill drains left→right as the clock runs out */}
       {active && (
