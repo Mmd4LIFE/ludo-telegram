@@ -91,19 +91,18 @@ const HOME_PAD = 0.16;
 const BOARD_BG = "#ffffff";
 const YARD_INSET = 0.22;
 
-function homePanel(slots: [number, number][]) {
+// The white home is a disc centred on the four tokens, just big enough to hold them
+// (their ring radius + a token + HOME_PAD). Derived from the slots, so it follows if
+// the tokens move.
+function homeCircle(slots: [number, number][]) {
   const cs = slots.map(([c]) => c);
   const rs = slots.map(([, r]) => r);
-  const x0 = Math.min(...cs) + 0.5 - TOKEN_R - HOME_PAD;
-  const x1 = Math.max(...cs) + 0.5 + TOKEN_R + HOME_PAD;
-  const y0 = Math.min(...rs) + 0.5 - TOKEN_R - HOME_PAD;
-  const y1 = Math.max(...rs) + 0.5 + TOKEN_R + HOME_PAD;
-  return {
-    x: x0 * CELL,
-    y: y0 * CELL,
-    width: (x1 - x0) * CELL,
-    height: (y1 - y0) * CELL,
-  };
+  const cx = (Math.min(...cs) + Math.max(...cs)) / 2 + 0.5;
+  const cy = (Math.min(...rs) + Math.max(...rs)) / 2 + 0.5;
+  const reach = Math.max(
+    ...slots.map(([c, r]) => Math.hypot(c + 0.5 - cx, r + 0.5 - cy))
+  );
+  return { cx: cx * CELL, cy: cy * CELL, r: (reach + TOKEN_R + HOME_PAD) * CELL };
 }
 
 const SAFE = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
@@ -191,8 +190,8 @@ export default function Board({
               rx={12}
               fill={COLORS[col]}
             />
-            {/* the white home panel — sized from the slots so it hugs the tokens */}
-            <rect {...homePanel(y.slots)} rx={10} fill="#ffffff" />
+            {/* the white home — a disc sized from the slots so it hugs the tokens */}
+            <circle {...homeCircle(y.slots)} fill="#ffffff" />
             {y.slots.map(([c, r], i) => {
               const [cx, cy] = px(c, r);
               return <circle key={i} cx={cx} cy={cy} r={CELL * TOKEN_R} fill={COLOR_SOFT[col]} stroke={COLORS[col]} strokeWidth={2} />;
