@@ -99,12 +99,17 @@ export async function authenticate(): Promise<Profile> {
   if (initData) {
     resp = await req("POST", "/api/auth/telegram", { init_data: initData });
   } else {
-    // local dev only — the backend refuses this when ENV=production
-    resp = await req("POST", "/api/auth/dev", {
-      telegram_id: 111111,
-      first_name: "Dev",
-      username: "dev",
-    });
+    // No Telegram context (SDK blocked, or opened in a plain browser). Dev login is
+    // refused in production, so surface something a player can act on.
+    try {
+      resp = await req("POST", "/api/auth/dev", {
+        telegram_id: 111111,
+        first_name: "Dev",
+        username: "dev",
+      });
+    } catch {
+      throw new Error("Please open Ludo from the Telegram bot (tap Play in @ludoboard_bot).");
+    }
   }
   setToken(resp.token);
   return resp.user;

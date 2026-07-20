@@ -633,66 +633,47 @@ function WaitingRoom({
         </Button>
       </div>
 
-      {/* fun dice while you wait — server-rolled, rate-limited, ranked */}
-      <Card>
-        <div className="flex items-baseline justify-between">
-          <SectionLabel>Lucky dice</SectionLabel>
-          <span className="text-[10px] text-muted-foreground">best average wins</span>
-        </div>
-        <div className="mt-2.5 flex items-center gap-3">
-          <div className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white shadow-lg">
-            <Pips n={rolled} />
-          </div>
-          <Button className="flex-1" disabled={busy || coolLeft > 0} onClick={roll}>
-            <Dice5 className="size-5" />
-            {coolLeft > 0 ? `Wait ${Math.ceil(coolLeft)}s` : "Roll"}
-          </Button>
-        </div>
-        {dice && dice.ranking.length > 0 && (
-          <div className="mt-3 flex flex-col gap-1.5">
-            {dice.ranking.map((r, i) => (
-              <div
-                key={r.user_id}
-                className="flex items-center gap-2 rounded-lg bg-secondary/50 px-2.5 py-1.5 text-xs"
-              >
-                <span className="w-4 text-center font-bold text-muted-foreground">{i + 1}</span>
-                <span
-                  className={cn(
-                    "flex-1 truncate font-semibold",
-                    r.user_id === profile.id && "text-primary"
-                  )}
-                >
-                  {r.user_id === profile.id ? "You" : r.name}
-                </span>
-                <span className="tabular-nums text-muted-foreground">{r.rolls}×</span>
-                <span className="tabular-nums text-muted-foreground">sum {r.total}</span>
-                <span className="tabular-nums font-bold">avg {r.avg.toFixed(1)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
+      {/* chat — Telegram-style: yours on the right, others on the left */}
       <Card>
         <SectionLabel>Room chat</SectionLabel>
         {/* fixed frame so the lobby layout never jumps as messages arrive */}
-        <div className="no-scrollbar mt-2 flex h-36 flex-col gap-1.5 overflow-y-auto">
+        <div className="no-scrollbar mt-2 flex h-44 flex-col gap-2 overflow-y-auto">
           {chat.length === 0 && (
             <div className="text-xs text-muted-foreground">Say hi while you wait.</div>
           )}
-          {chat.map((m) => (
-            <div key={m.id} className="text-sm">
-              <span
-                className={cn(
-                  "font-bold",
-                  m.user_id === profile.id ? "text-primary" : "text-muted-foreground"
-                )}
+          {chat.map((m) => {
+            const mine = m.user_id === profile.id;
+            return (
+              <div
+                key={m.id}
+                className={cn("flex items-end gap-2", mine ? "justify-end" : "justify-start")}
               >
-                {m.user_id === profile.id ? "You" : m.name}:
-              </span>{" "}
-              <span className="break-words">{m.text}</span>
-            </div>
-          ))}
+                {!mine && (
+                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-secondary text-[11px] font-bold ring-1 ring-white/10">
+                    {(m.name || "P").slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+                <div
+                  className={cn(
+                    "max-w-[75%] rounded-2xl px-3 py-1.5",
+                    mine
+                      ? "rounded-br-sm bg-primary text-primary-foreground"
+                      : "rounded-bl-sm bg-secondary text-foreground"
+                  )}
+                >
+                  {!mine && (
+                    <div className="text-[10px] font-bold text-muted-foreground">{m.name}</div>
+                  )}
+                  <div className="break-words text-sm">{m.text}</div>
+                </div>
+                {mine && (
+                  <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/20 text-[11px] font-bold text-primary ring-1 ring-primary/30">
+                    {(profile.first_name || "Y").slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+              </div>
+            );
+          })}
           <div ref={chatEndRef} />
         </div>
         <div className="mt-2 flex gap-2">
@@ -712,6 +693,65 @@ function WaitingRoom({
         </div>
       </Card>
 
+      {/* fun dice while you wait — server-rolled, rate-limited, ranked */}
+      <Card>
+        <div className="flex items-baseline justify-between">
+          <SectionLabel>Lucky dice</SectionLabel>
+          <span className="text-[10px] text-muted-foreground">best average wins</span>
+        </div>
+        <div className="mt-2.5 flex items-center gap-3">
+          <div className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white shadow-lg">
+            <Pips n={rolled} />
+          </div>
+          {/* cooldown refills the button; it's ready again when full */}
+          <button
+            disabled={busy || coolLeft > 0}
+            onClick={roll}
+            className="relative h-12 flex-1 overflow-hidden rounded-2xl bg-secondary ring-1 ring-white/10 transition active:translate-y-px disabled:cursor-default"
+          >
+            <div
+              className="absolute inset-y-0 left-0 bg-primary transition-[width] duration-200 ease-linear"
+              style={{
+                width: `${
+                  coolLeft > 0 && dice
+                    ? Math.max(0, Math.min(100, (1 - coolLeft / dice.cooldown) * 100))
+                    : 100
+                }%`,
+              }}
+            />
+            <span className="relative z-10 flex h-full w-full items-center justify-center gap-2 font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)]">
+              <Dice5 className="size-5" />
+              {coolLeft > 0 ? `${Math.ceil(coolLeft)}s` : "Roll"}
+            </span>
+          </button>
+        </div>
+        {dice && dice.ranking.length > 0 && (
+          <div className="mt-3 flex flex-col gap-1.5">
+            {dice.ranking.map((r, i) => (
+              <div
+                key={r.user_id}
+                className="flex items-center gap-2 rounded-lg bg-secondary/50 px-2.5 py-1.5 text-xs"
+              >
+                <span className="w-4 text-center font-bold text-muted-foreground">{i + 1}</span>
+                <span className="grid size-6 shrink-0 place-items-center rounded-full bg-secondary text-[10px] font-bold ring-1 ring-white/10">
+                  {(r.name || "P").slice(0, 1).toUpperCase()}
+                </span>
+                <span
+                  className={cn(
+                    "flex-1 truncate font-semibold",
+                    r.user_id === profile.id && "text-primary"
+                  )}
+                >
+                  {r.name}
+                </span>
+                <span className="tabular-nums text-muted-foreground">{r.rolls}×</span>
+                <span className="tabular-nums text-muted-foreground">sum {r.total}</span>
+                <span className="tabular-nums font-bold">avg {r.avg.toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
       {isHost ? (
         <div className="mt-auto flex flex-col gap-2 pt-2">
           <Button

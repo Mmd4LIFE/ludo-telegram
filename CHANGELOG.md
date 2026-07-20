@@ -3,6 +3,38 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.2.0 — A proper board, and friends to play with
+
+**The board**
+- The real thing: a classic cross board with four home yards, coloured home paths,
+  star safe-squares and a home in the middle — replacing the old ring.
+- The board turns to face you, so your colour is always at the front.
+- Tokens glide between squares, and when you roll, the die tumbles before it lands so
+  you can actually see what you got.
+- After you roll, every token you can move shows a marker on exactly where it would
+  land — with a red ring when the move knocks a rival home.
+- Tokens that make it home rest in their own colour's wedge in the middle.
+- Your stars are yours: land on your own star to send an intruder home, but you can't
+  touch a player sitting safe on theirs.
+
+**Your turn**
+- A turn clock runs down on the Roll button. Run out of time and the game rolls and
+  moves for you, so nobody is left waiting.
+- If a roll leaves you with nothing to play, the board says so instead of skipping in
+  silence.
+
+**Playing with friends**
+- Invite straight from Telegram — share a link and your friend lands right in your room.
+- Rooms now have a proper lobby: you see everyone who's joined, the host approves each
+  player and hands them a colour, and only the host can start or close the room.
+- Chat with everyone in the room while you wait for seats to fill.
+- Pass the time with Lucky Dice — roll for fun and see who's luckiest on the room
+  leaderboard.
+
+**Finishing**
+- A winner screen with the final standings, and a Rematch button — when everyone's in,
+  you're dropped straight into a fresh game.
+
 ## 0.1.0 — First roll 🎲
 - Ludo Board is here! Play a full game of Ludo right inside Telegram.
 - Quick Play against house bots, or create a room and invite friends with a code.

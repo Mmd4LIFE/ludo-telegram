@@ -26,8 +26,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`dark ${font.variable}`}>
       <head>
-        {/* Telegram Mini App SDK */}
-        <script src="https://telegram.org/js/telegram-web-app.js" />
+        {/* Telegram Mini App SDK — served from our own origin. Loading it from
+            telegram.org fails on restricted/slow mobile networks, which left the app
+            with no initData and bounced users to the dev-auth 403. */}
+        <script src="/telegram-web-app.js" />
       </head>
       <body className="antialiased">{children}</body>
     </html>
