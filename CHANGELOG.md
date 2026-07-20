@@ -5,6 +5,7 @@ Player-facing notes. Keep this friendly and free of internal/technical reference
 
 ## 0.2.6 — Board polish
 - The white home panel now sits snugly around the four tokens instead of a loose box.
+- A clean white rim now frames the board around the four home blocks.
 
 ## 0.2.5 — New navigation
 - A bottom bar to get around, with Play front and centre.

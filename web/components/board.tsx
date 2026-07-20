@@ -84,6 +84,13 @@ const YARD: Record<string, { ox: number; oy: number; slots: [number, number][] }
 const TOKEN_R = 0.34;
 const HOME_PAD = 0.16;
 
+// Board paper + the white margin left around each coloured home block. The inset is
+// applied on all four sides, but only reads on the outer two — the inner sides sit
+// against the white track, so the gap is invisible there. Result: a clean white rim
+// framing the board.
+const BOARD_BG = "#ffffff";
+const YARD_INSET = 0.22;
+
 function homePanel(slots: [number, number][]) {
   const cs = slots.map(([c]) => c);
   const rs = slots.map(([, r]) => r);
@@ -170,13 +177,20 @@ export default function Board({
       width="100%"
       style={{ maxWidth: 440, display: "block", margin: "0 auto", borderRadius: 16 }}
     >
-      <rect x={0} y={0} width={SIZE} height={SIZE} rx={16} fill="#f6f7f9" />
+      <rect x={0} y={0} width={SIZE} height={SIZE} rx={16} fill={BOARD_BG} />
 
       <g transform={`rotate(${rot} ${MID} ${MID})`}>
         {/* yards */}
         {Object.entries(YARD).map(([col, y]) => (
           <g key={col}>
-            <rect x={y.ox * CELL} y={y.oy * CELL} width={6 * CELL} height={6 * CELL} rx={12} fill={COLORS[col]} />
+            <rect
+              x={(y.ox + YARD_INSET) * CELL}
+              y={(y.oy + YARD_INSET) * CELL}
+              width={(6 - 2 * YARD_INSET) * CELL}
+              height={(6 - 2 * YARD_INSET) * CELL}
+              rx={12}
+              fill={COLORS[col]}
+            />
             {/* the white home panel — sized from the slots so it hugs the tokens */}
             <rect {...homePanel(y.slots)} rx={10} fill="#ffffff" />
             {y.slots.map(([c, r], i) => {
