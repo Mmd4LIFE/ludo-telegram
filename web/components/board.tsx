@@ -63,16 +63,15 @@ const HOME_SLOT: Record<string, [number, number]> = {
   BLUE: [7, 8],   // bottom wedge
 };
 
-// Each yard is 6×6 from (ox,oy); its white "home" panel covers cells ox+1..ox+4, so its
-// centre is ox+3. The four token slots therefore sit on cells 1 and 4 of the yard —
-// their midpoint lands exactly on that centre, so the home border wraps the tokens with
-// an even margin all round (cells 2 and 4 used to push them half a cell into the
-// bottom-right edge). Identical in every corner, so rotation keeps all four alike.
+// Each yard is a 6×6 block anchored at (ox,oy); slots are the four token positions in
+// board cells. They're mirrored corner to corner so every home reads the same once the
+// board rotates. The white home disc is derived from these (homeCircle), so moving a
+// slot moves the disc with it.
 const YARD: Record<string, { ox: number; oy: number; slots: [number, number][] }> = {
-  RED: { ox: 0, oy: 0, slots: [[2, 2], [4, 2], [2, 4], [4, 4]] },
-  GREEN: { ox: 9, oy: 0, slots: [[10, 2], [12, 2], [10, 4], [12, 4]] },
-  YELLOW: { ox: 9, oy: 9, slots: [[10, 10], [12, 10], [10, 12], [12, 12]] },
-  BLUE: { ox: 0, oy: 9, slots: [[2, 10], [4, 10], [2, 12], [4, 12]] },
+  RED: { ox: 0, oy: 0, slots: [[2, 2], [3, 2], [2, 3], [3, 3]] },
+  GREEN: { ox: 9, oy: 0, slots: [[11, 2], [12, 2], [11, 3], [12, 3]] },
+  YELLOW: { ox: 9, oy: 9, slots: [[11, 11], [12, 11], [11, 12], [12, 12]] },
+  BLUE: { ox: 0, oy: 9, slots: [[2, 11], [3, 11], [2, 12], [3, 12]] },
 };
 
 // --- home panel tuning ------------------------------------------------------
