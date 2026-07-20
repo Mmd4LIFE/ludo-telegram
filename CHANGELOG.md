@@ -3,6 +3,10 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.2.3 — Board polish
+- The four tokens now sit properly centred inside each home, so the home's border wraps
+  them evenly instead of crowding them into one corner.
+
 ## 0.2.2 — Room tweaks
 - The host picks the colours: tap any player's colour dot to change it — including your
   own, so you're no longer stuck as red. Swap freely before you start.
