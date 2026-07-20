@@ -20,6 +20,10 @@ import {
   AlertTriangle,
   Trash2,
   Shield,
+  ShoppingBag,
+  Gamepad2,
+  User,
+  Sparkles,
 } from "lucide-react";
 import {
   api,
@@ -53,6 +57,7 @@ const COLOR_HEX: Record<string, string> = {
 };
 
 type Room = { code: string; host: boolean };
+type Tab = "shop" | "friends" | "home" | "ranks" | "me";
 type Clock = { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
 
 // Catch any render error so a single bad frame can never take down the whole webview
@@ -96,6 +101,7 @@ function Home() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [view, setView] = useState<Tab>("home");
   const [showAdmin, setShowAdmin] = useState(false);
   const [room, setRoom] = useState<Room | null>(null); // waiting room
   const [matchCode, setMatchCode] = useState<string>(""); // live match
@@ -261,22 +267,35 @@ function Home() {
     );
 
   return (
-    <Lobby
-      profile={profile}
-      busy={busy}
-      onPlayBots={playBots}
-      onCreateRoom={createRoom}
-      onJoin={joinFromList}
-      onAdmin={() => setShowAdmin(true)}
-    />
+    <>
+      {view === "home" && (
+        <Lobby
+          profile={profile}
+          busy={busy}
+          onPlayBots={playBots}
+          onCreateRoom={createRoom}
+          onJoin={joinFromList}
+        />
+      )}
+      {view === "me" && <MeScreen profile={profile} onAdmin={() => setShowAdmin(true)} />}
+      {view === "shop" && <ComingSoon title="Shop" />}
+      {view === "friends" && <ComingSoon title="Friends" />}
+      {view === "ranks" && <ComingSoon title="Ranks" />}
+      <BottomNav view={view} onChange={setView} />
+    </>
   );
 }
 
 /* ------------------------------------------------------------------ shells */
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pb-8 pt-5">
+    <main
+      className={cn(
+        "mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-5",
+        className ?? "pb-8"
+      )}
+    >
       {children}
     </main>
   );
@@ -333,19 +352,21 @@ function Lobby({
   onPlayBots,
   onCreateRoom,
   onJoin,
-  onAdmin,
 }: {
   profile: Profile;
   busy: boolean;
   onPlayBots: () => void;
   onCreateRoom: () => void;
   onJoin: (code: string) => void;
-  onAdmin: () => void;
 }) {
   const [tables, setTables] = useState<MatchSummary[]>([]);
   useEffect(() => {
     let alive = true;
-    const load = () => api.listMatches().then((t) => alive && setTables(t)).catch(() => {});
+    const load = () =>
+      api
+        .listMatches()
+        .then((t) => alive && setTables(t))
+        .catch(() => {});
     load();
     const id = setInterval(load, 4000);
     return () => {
@@ -355,42 +376,20 @@ function Lobby({
   }, []);
 
   return (
-    <Shell>
+    <Shell className="pb-28">
       <WalletBar profile={profile} />
 
-      {/* hero */}
-      <Card className="relative overflow-hidden bg-gradient-to-br from-[#1a2340] to-card">
-        <h1 className="text-xl font-extrabold leading-tight">Ludo Board</h1>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Race four tokens home. Knock rivals back to base.
-        </p>
-        <Button size="lg" className="mt-4 w-full" disabled={busy} onClick={onPlayBots}>
-          <Bot className="size-5" /> Play vs Bots
-        </Button>
-      </Card>
+      {/* the two things you open the app to do — no marketing copy */}
+      <div className="grid grid-cols-2 gap-2.5">
+        <Tile icon={Bot} title="Quick Game" hot wide disabled={busy} onClick={onPlayBots} />
+        <Tile icon={Plus} title="Create Room" wide disabled={busy} onClick={onCreateRoom} />
+      </div>
 
-      {/* friends */}
-      <Card>
-        <SectionLabel>Play with friends</SectionLabel>
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          Create a private room and invite friends straight from Telegram.
-        </p>
-        <Button
-          variant="secondary"
-          className="mt-3 w-full"
-          disabled={busy}
-          onClick={onCreateRoom}
-        >
-          <Plus className="size-4" /> Create private room
-        </Button>
-      </Card>
-
-      {/* open tables */}
       <div className="flex flex-col gap-2">
         <SectionLabel className="px-1">Open rooms</SectionLabel>
         {tables.length === 0 ? (
           <Card className="text-center text-xs text-muted-foreground">
-            No open rooms right now — create one above.
+            No open rooms right now.
           </Card>
         ) : (
           tables.map((t) => (
@@ -416,18 +415,40 @@ function Lobby({
           ))
         )}
       </div>
-
-      {profile.is_admin && (
-        <Button variant="ghost" className="mt-auto" onClick={onAdmin}>
-          <Shield className="size-4" /> Admin
-        </Button>
-      )}
-
-      <p className={cn("pt-4 text-center text-[10px] text-muted-foreground", !profile.is_admin && "mt-auto")}>
-        {profile.games_won}/{profile.games_played} games won
-        {!getInitData() && " · dev login"}
-      </p>
     </Shell>
+  );
+}
+
+function Tile({
+  icon: Icon,
+  title,
+  onClick,
+  hot,
+  wide,
+  disabled,
+}: {
+  icon: React.ElementType;
+  title: string;
+  onClick: () => void;
+  hot?: boolean;
+  wide?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "flex flex-col items-center gap-1.5 rounded-2xl border border-white/5 p-5 text-center transition-transform active:scale-[0.97] disabled:opacity-50",
+        wide && "col-span-2",
+        hot
+          ? "bg-gradient-to-br from-[#b8860b] to-[#6b4e00]"
+          : "bg-gradient-to-br from-secondary to-card"
+      )}
+    >
+      <Icon className={cn("size-7", hot ? "text-white" : "text-primary")} />
+      <span className="font-extrabold">{title}</span>
+    </button>
   );
 }
 
@@ -1243,6 +1264,124 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
           ))}
         </div>
       </Card>
+    </Shell>
+  );
+}
+
+/* ------------------------------------------------------------------- nav */
+
+const TABS: { view: Tab; label: string; icon: React.ElementType }[] = [
+  { view: "shop", label: "Shop", icon: ShoppingBag },
+  { view: "friends", label: "Friends", icon: Users },
+  { view: "home", label: "Play", icon: Gamepad2 },
+  { view: "ranks", label: "Ranks", icon: Trophy },
+  { view: "me", label: "Me", icon: User },
+];
+
+// Play sits dead centre — the thumb's home position and the thing you open the app for.
+function BottomNav({ view, onChange }: { view: Tab; onChange: (v: Tab) => void }) {
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-40 mx-auto flex w-full max-w-md border-t border-white/10 bg-background/95 backdrop-blur"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      {TABS.map((t) => {
+        const active = view === t.view;
+        const Icon = t.icon;
+        const primary = t.view === "home";
+        return (
+          <button
+            key={t.view}
+            aria-label={t.label}
+            onClick={() => {
+              haptic("light");
+              onChange(t.view);
+            }}
+            className={cn(
+              "relative flex flex-1 flex-col items-center py-4 transition-colors",
+              active ? "text-primary" : "text-muted-foreground"
+            )}
+          >
+            {primary ? (
+              <>
+                {/* raised into a notch: the ring is painted in the page background so it
+                    punches a clean curve through the nav's top border */}
+                <span className="absolute -top-4 left-1/2 grid size-14 -translate-x-1/2 place-items-center rounded-full bg-gradient-to-br from-secondary to-card ring-4 ring-background transition-transform active:scale-95">
+                  <Icon className="size-7" />
+                </span>
+                <span className="size-6" aria-hidden />
+              </>
+            ) : (
+              <Icon className="size-6" />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function ComingSoon({ title }: { title: string }) {
+  return (
+    <Shell className="pb-28">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+        <Sparkles className="size-10 text-primary" />
+        <div className="text-lg font-extrabold">{title}</div>
+        <p className="max-w-[240px] text-sm text-muted-foreground">
+          Coming in a future update.
+        </p>
+      </div>
+    </Shell>
+  );
+}
+
+function MeScreen({ profile, onAdmin }: { profile: Profile; onAdmin: () => void }) {
+  const initial = (profile.first_name || "P").slice(0, 1).toUpperCase();
+  const winRate = profile.games_played
+    ? Math.round((profile.games_won / profile.games_played) * 100)
+    : 0;
+  const stats: [string, string | number][] = [
+    ["Games", profile.games_played],
+    ["Wins", profile.games_won],
+    ["Win rate", `${winRate}%`],
+  ];
+  return (
+    <Shell className="pb-28">
+      <Card className="text-center">
+        <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-gradient-to-br from-secondary to-card text-2xl font-bold ring-1 ring-white/10">
+          {initial}
+        </div>
+        <div className="mt-2 text-lg font-extrabold">{profile.first_name || "Player"}</div>
+        {profile.username && (
+          <div className="text-xs text-muted-foreground">@{profile.username}</div>
+        )}
+        <div className="mt-3 flex items-center justify-center gap-2">
+          <span className="rounded-full bg-secondary px-3 py-1 text-[11px] font-bold text-muted-foreground ring-1 ring-white/10">
+            LVL {profile.level}
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-[11px] font-bold ring-1 ring-white/10">
+            <Coins className="size-3.5 text-primary" />
+            <span className="tabular-nums">{profile.coins.toLocaleString()}</span>
+          </span>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-3 gap-2">
+        {stats.map(([label, value]) => (
+          <div key={label} className="rounded-2xl bg-card px-3 py-3 text-center ring-1 ring-white/10">
+            <div className="text-lg font-extrabold tabular-nums">{value}</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              {label}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {profile.is_admin && (
+        <Button variant="secondary" className="w-full" onClick={onAdmin}>
+          <Shield className="size-4" /> Admin panel
+        </Button>
+      )}
     </Shell>
   );
 }

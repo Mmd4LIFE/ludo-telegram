@@ -3,6 +3,11 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.2.5 — New navigation
+- A bottom bar to get around, with Play front and centre.
+- A Me tab with your profile and record. Shop, Friends and Ranks are on the way.
+- A cleaner home screen: just Quick Game and Create Room.
+
 ## 0.2.4 — Board tokens & admin view
 - Home tokens sit evenly in all four corners now, mirrored so every home matches.
 - Admins get a private overview of players and activity.
