@@ -185,9 +185,12 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
     if move is None:
         if legal_moves(state):
             raise ValueError("cannot pass: legal moves exist")
-        # No move possible. A 6 with no move still ends the turn (no free re-roll).
-        _end_turn(state, extra_turn=False)
-        return ApplyResult(None, [], False, False, state.phase is Phase.FINISHED)
+        # A six still earns another roll even when it cannot be played — you keep the
+        # reward for the six. The triple-six forfeit caps the streak, so a player who
+        # can never move still hands the turn on rather than rolling forever.
+        extra = die == 6
+        _end_turn(state, extra_turn=extra)
+        return ApplyResult(None, [], False, extra, state.phase is Phase.FINISHED)
 
     player = state.current_player
 

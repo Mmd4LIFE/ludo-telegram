@@ -636,8 +636,10 @@ function WaitingRoom({
       {/* chat — Telegram-style: yours on the right, others on the left */}
       <Card>
         <SectionLabel>Room chat</SectionLabel>
-        {/* fixed frame so the lobby layout never jumps as messages arrive */}
-        <div className="no-scrollbar mt-2 flex h-44 flex-col gap-2 overflow-y-auto">
+        {/* fixed frame so the lobby layout never jumps; mt-auto pins messages to the
+            bottom (Telegram-style) so a near-empty chat isn't stuck at the top */}
+        <div className="no-scrollbar mt-2 flex h-44 flex-col overflow-y-auto">
+          <div className="mt-auto flex flex-col gap-2">
           {chat.length === 0 && (
             <div className="text-xs text-muted-foreground">Say hi while you wait.</div>
           )}
@@ -675,6 +677,7 @@ function WaitingRoom({
             );
           })}
           <div ref={chatEndRef} />
+          </div>
         </div>
         <div className="mt-2 flex gap-2">
           <input

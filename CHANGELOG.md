@@ -3,6 +3,11 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.2.1 — Fixes
+- Roll a six you can't play? You keep the reward — you still get another roll.
+- Room chat now sits at the bottom and fills upward, the way a chat should.
+- Fixed invited friends being turned away with an error when they opened the game.
+
 ## 0.2.0 — A proper board, and friends to play with
 
 **The board**

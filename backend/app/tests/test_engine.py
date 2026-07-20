@@ -126,6 +126,24 @@ def test_safe_square_protects_owner_only() -> None:
     _check("intruder on your star is captured", moves and moves[0].captures == ((1, 0),))
 
 
+def test_six_with_no_move_keeps_the_turn() -> None:
+    """A six you cannot play still earns another roll (the reward for the six)."""
+    s = initial_state(4)
+    # Every token sits one square short of HOME, so a 6 overshoots and nothing is legal.
+    s.players[0].tokens = [55, 55, 55, 55]
+    register_roll(s, 6)
+    _check("no legal move (a 6 overshoots HOME)", legal_moves(s) == [])
+    res = apply_move(s, None)
+    _check("an unplayable six still grants an extra turn", res.extra_turn)
+    _check("same player rolls again", s.current == 0 and s.phase is Phase.ROLL)
+
+    # A non-six with no move simply passes the turn.
+    s2 = initial_state(4)
+    register_roll(s2, 3)
+    apply_move(s2, None)
+    _check("an unplayable non-six passes the turn", s2.current == 1)
+
+
 # --- home / exact landing ---------------------------------------------------
 def test_must_land_home_exactly() -> None:
     s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
@@ -189,6 +207,7 @@ def run_all() -> None:
         test_triple_six_forfeits,
         test_capture_sends_home_and_grants_turn,
         test_safe_square_protects_owner_only,
+        test_six_with_no_move_keeps_the_turn,
         test_must_land_home_exactly,
         test_fuzz_games,
     ):
