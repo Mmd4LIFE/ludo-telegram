@@ -30,10 +30,12 @@ class UserProfile(BaseModel):
     games_won: int
     # bot @username, so the Mini App can build t.me/<bot>?start=rm-<code> invite links.
     bot_username: str = ""
+    is_admin: bool = False
 
     @classmethod
     def from_user(cls, u) -> "UserProfile":
         from app.bot.instance import get_bot_username
+        from app.config import settings
 
         return cls(
             id=u.id,
@@ -45,12 +47,59 @@ class UserProfile(BaseModel):
             games_played=u.games_played,
             games_won=u.games_won,
             bot_username=get_bot_username(),
+            is_admin=u.telegram_id in settings.admin_ids,
         )
 
 
 class TokenResponse(BaseModel):
     token: str
     user: UserProfile
+
+
+# --- admin ------------------------------------------------------------------
+class AdminUser(BaseModel):
+    """A player as an admin sees them. Still no telegram_id — that never leaves."""
+
+    id: int
+    first_name: str
+    username: str | None = None
+    coins: int
+    level: int
+    xp: int
+    games_played: int
+    games_won: int
+    bot_started: bool
+    is_banned: bool
+    last_seen_at: str | None = None
+    created_at: str | None = None
+
+    @classmethod
+    def from_user(cls, u) -> "AdminUser":
+        return cls(
+            id=u.id,
+            first_name=u.first_name,
+            username=u.username,
+            coins=u.coins,
+            level=u.level,
+            xp=u.xp,
+            games_played=u.games_played,
+            games_won=u.games_won,
+            bot_started=u.bot_started,
+            is_banned=u.is_banned,
+            last_seen_at=u.last_seen_at.isoformat() if u.last_seen_at else None,
+            created_at=u.created_at.isoformat() if getattr(u, "created_at", None) else None,
+        )
+
+
+class AdminStats(BaseModel):
+    users: int
+    users_started: int
+    games_played: int
+    coins_in_circulation: int
+    matches_playing: int
+    matches_waiting: int
+    matches_finished: int
+    matches_abandoned: int
 
 
 # --- matches ----------------------------------------------------------------

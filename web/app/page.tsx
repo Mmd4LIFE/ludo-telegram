@@ -19,8 +19,18 @@ import {
   Home as HomeIcon,
   AlertTriangle,
   Trash2,
+  Shield,
 } from "lucide-react";
-import { api, authenticate, ChatMessage, DiceState, MatchSummary, Profile } from "@/lib/api";
+import {
+  api,
+  authenticate,
+  AdminStats,
+  AdminUser,
+  ChatMessage,
+  DiceState,
+  MatchSummary,
+  Profile,
+} from "@/lib/api";
 import {
   getInitData,
   haptic,
@@ -86,6 +96,7 @@ function Home() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [showAdmin, setShowAdmin] = useState(false);
   const [room, setRoom] = useState<Room | null>(null); // waiting room
   const [matchCode, setMatchCode] = useState<string>(""); // live match
   const [state, setState] = useState<GameState | null>(null);
@@ -219,6 +230,8 @@ function Home() {
 
   if (!profile) return <Splash />;
 
+  if (showAdmin) return <AdminPanel onBack={() => setShowAdmin(false)} />;
+
   if (matchCode && state)
     return (
       <LiveMatch
@@ -254,6 +267,7 @@ function Home() {
       onPlayBots={playBots}
       onCreateRoom={createRoom}
       onJoin={joinFromList}
+      onAdmin={() => setShowAdmin(true)}
     />
   );
 }
@@ -319,12 +333,14 @@ function Lobby({
   onPlayBots,
   onCreateRoom,
   onJoin,
+  onAdmin,
 }: {
   profile: Profile;
   busy: boolean;
   onPlayBots: () => void;
   onCreateRoom: () => void;
   onJoin: (code: string) => void;
+  onAdmin: () => void;
 }) {
   const [tables, setTables] = useState<MatchSummary[]>([]);
   useEffect(() => {
@@ -401,7 +417,13 @@ function Lobby({
         )}
       </div>
 
-      <p className="mt-auto pt-4 text-center text-[10px] text-muted-foreground">
+      {profile.is_admin && (
+        <Button variant="ghost" className="mt-auto" onClick={onAdmin}>
+          <Shield className="size-4" /> Admin
+        </Button>
+      )}
+
+      <p className={cn("pt-4 text-center text-[10px] text-muted-foreground", !profile.is_admin && "mt-auto")}>
         {profile.games_won}/{profile.games_played} games won
         {!getInitData() && " · dev login"}
       </p>
@@ -1100,6 +1122,127 @@ function LiveMatch({
           />
         </div>
       )}
+    </Shell>
+  );
+}
+
+/* ---------------------------------------------------------------- admin */
+
+function AdminPanel({ onBack }: { onBack: () => void }) {
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [q, setQ] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.adminStats().then(setStats).catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(() => {
+    const id = setTimeout(
+      () => api.adminUsers(q || undefined).then(setUsers).catch((e) => setErr(String(e))),
+      q ? 300 : 0
+    );
+    return () => clearTimeout(id);
+  }, [q]);
+
+  const ago = (iso: string | null) => {
+    if (!iso) return "never";
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  };
+
+  const tiles: [string, string | number][] = stats
+    ? [
+        ["Players", stats.users],
+        ["Started bot", stats.users_started],
+        ["Games played", stats.games_played],
+        ["Coins out", stats.coins_in_circulation.toLocaleString()],
+        ["Playing now", stats.matches_playing],
+        ["Open rooms", stats.matches_waiting],
+        ["Finished", stats.matches_finished],
+        ["Abandoned", stats.matches_abandoned],
+      ]
+    : [];
+
+  return (
+    <Shell>
+      <div className="flex items-center justify-between">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <ArrowLeft className="size-4" /> Back
+        </button>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1.5 text-xs font-bold ring-1 ring-white/10">
+          <Shield className="size-3.5 text-primary" /> ADMIN
+        </span>
+      </div>
+
+      {err && (
+        <div className="rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">{err}</div>
+      )}
+
+      <Card>
+        <SectionLabel>Overview</SectionLabel>
+        <div className="mt-2.5 grid grid-cols-2 gap-2">
+          {tiles.map(([label, value]) => (
+            <div key={label} className="rounded-xl bg-secondary/60 px-3 py-2">
+              <div className="text-lg font-extrabold tabular-nums">{value}</div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                {label}
+              </div>
+            </div>
+          ))}
+          {!stats && <div className="text-xs text-muted-foreground">Loading…</div>}
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex items-baseline justify-between">
+          <SectionLabel>Players</SectionLabel>
+          <span className="text-[10px] text-muted-foreground">{users.length} shown</span>
+        </div>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name or username…"
+          className="mt-2 h-10 w-full rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+        />
+        <div className="no-scrollbar mt-2 flex max-h-[50vh] flex-col gap-1.5 overflow-y-auto">
+          {users.length === 0 && (
+            <div className="py-3 text-center text-xs text-muted-foreground">No players found.</div>
+          )}
+          {users.map((u) => (
+            <div key={u.id} className="flex items-center gap-2.5 rounded-xl bg-secondary/50 px-2.5 py-2">
+              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-secondary text-xs font-bold ring-1 ring-white/10">
+                {(u.first_name || "P").slice(0, 1).toUpperCase()}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-sm font-semibold">{u.first_name || "Player"}</span>
+                  {u.is_banned && (
+                    <span className="rounded-full bg-red/20 px-1.5 text-[9px] font-bold text-red">
+                      BANNED
+                    </span>
+                  )}
+                  {!u.bot_started && (
+                    <span className="rounded-full bg-white/10 px-1.5 text-[9px] font-bold text-muted-foreground">
+                      NO /START
+                    </span>
+                  )}
+                </div>
+                <div className="truncate text-[10px] text-muted-foreground">
+                  {u.username ? `@${u.username} · ` : ""}lvl {u.level} · {u.games_won}/
+                  {u.games_played} won · seen {ago(u.last_seen_at)}
+                </div>
+              </div>
+              <span className="shrink-0 text-xs font-bold tabular-nums text-primary">
+                {u.coins.toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      </Card>
     </Shell>
   );
 }

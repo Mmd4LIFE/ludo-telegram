@@ -43,6 +43,33 @@ export interface Profile {
   games_played: number;
   games_won: number;
   bot_username: string;
+  is_admin: boolean;
+}
+
+export interface AdminUser {
+  id: number;
+  first_name: string;
+  username: string | null;
+  coins: number;
+  level: number;
+  xp: number;
+  games_played: number;
+  games_won: number;
+  bot_started: boolean;
+  is_banned: boolean;
+  last_seen_at: string | null;
+  created_at: string | null;
+}
+
+export interface AdminStats {
+  users: number;
+  users_started: number;
+  games_played: number;
+  coins_in_circulation: number;
+  matches_playing: number;
+  matches_waiting: number;
+  matches_finished: number;
+  matches_abandoned: number;
 }
 
 export interface SeatInfo {
@@ -138,6 +165,9 @@ export const api = {
   getDice: (code: string) => req<DiceState>("GET", `/api/matches/${code}/dice`),
   rollDice: (code: string) => req<DiceState>("POST", `/api/matches/${code}/dice`),
   getChat: (code: string) => req<ChatMessage[]>("GET", `/api/matches/${code}/chat`),
+  adminStats: () => req<AdminStats>("GET", "/api/admin/stats"),
+  adminUsers: (q?: string) =>
+    req<AdminUser[]>("GET", `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   sendChat: (code: string, text: string) =>
     req<ChatMessage[]>("POST", `/api/matches/${code}/chat`, { text }),
 };

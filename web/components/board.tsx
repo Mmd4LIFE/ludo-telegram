@@ -69,10 +69,10 @@ const HOME_SLOT: Record<string, [number, number]> = {
 // an even margin all round (cells 2 and 4 used to push them half a cell into the
 // bottom-right edge). Identical in every corner, so rotation keeps all four alike.
 const YARD: Record<string, { ox: number; oy: number; slots: [number, number][] }> = {
-  RED: { ox: 0, oy: 0, slots: [[1, 1], [4, 1], [1, 4], [4, 4]] },
-  GREEN: { ox: 9, oy: 0, slots: [[10, 1], [13, 1], [10, 4], [13, 4]] },
-  YELLOW: { ox: 9, oy: 9, slots: [[10, 10], [13, 10], [10, 13], [13, 13]] },
-  BLUE: { ox: 0, oy: 9, slots: [[1, 10], [4, 10], [1, 13], [4, 13]] },
+  RED: { ox: 0, oy: 0, slots: [[2, 2], [4, 2], [2, 4], [4, 4]] },
+  GREEN: { ox: 9, oy: 0, slots: [[10, 2], [12, 2], [10, 4], [12, 4]] },
+  YELLOW: { ox: 9, oy: 9, slots: [[10, 10], [12, 10], [10, 12], [12, 12]] },
+  BLUE: { ox: 0, oy: 9, slots: [[2, 10], [4, 10], [2, 12], [4, 12]] },
 };
 
 const SAFE = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
