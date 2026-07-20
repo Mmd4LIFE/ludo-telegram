@@ -74,31 +74,24 @@ const YARD: Record<string, { ox: number; oy: number; slots: [number, number][] }
   BLUE: { ox: 0, oy: 9, slots: [[2, 11], [3, 11], [2, 12], [3, 12]] },
 };
 
-// --- home panel tuning ------------------------------------------------------
-// TOKEN_R  : token radius, in cells.
-// HOME_PAD : white gap left around the tokens, in cells. Smaller = tighter panel.
-// The white "home" panel is derived from the yard's slots (homePanel below) rather
-// than hardcoded, so it always wraps exactly around the four tokens — move the slots
-// in YARD and the border follows.
+// --- home tuning ------------------------------------------------------------
+// TOKEN_R   : token radius, in cells.
+// HOME_PAD  : gap between the tokens and the ring — bigger = wider ring.
+// HOME_RING : ring thickness.
+// The ring is derived from the yard's slots (homeCircle below) rather than hardcoded,
+// so it always encircles the four tokens — move the slots in YARD and it follows.
 const TOKEN_R = 0.34;
-const HOME_PAD = 0.16;
-// thickness of the white ring drawn around each home's four tokens, in cells
+const HOME_PAD = 0.32;
 const HOME_RING = 0.16;
 
-// Board paper + the white margin left around each coloured home block. The inset is
-// applied on all four sides, but only reads on the outer two — the inner sides sit
-// against the white track, so the gap is invisible there. Result: a clean white rim
-// framing the board.
+// Board paper + the margin left around each home block.
 const BOARD_BG = "#ffffff";
 const YARD_INSET = 0.22;
-// Home blocks are white with a coloured outline; the colour is carried by the ring and
-// the tokens instead of a solid block.
+// Home blocks are plain paper — all the colour is carried by the ring and the tokens.
+// (Set YARD_BG to a tint if you ever want the corners to read as blocks again.)
 const YARD_BG = "#ffffff";
-const YARD_EDGE = 2;
 
-// The white home is a disc centred on the four tokens, just big enough to hold them
-// (their ring radius + a token + HOME_PAD). Derived from the slots, so it follows if
-// the tokens move.
+// The home ring: centred on the four tokens, radius = their reach + a token + HOME_PAD.
 function homeCircle(slots: [number, number][]) {
   const cs = slots.map(([c]) => c);
   const rs = slots.map(([, r]) => r);
@@ -194,8 +187,6 @@ export default function Board({
               height={(6 - 2 * YARD_INSET) * CELL}
               rx={12}
               fill={YARD_BG}
-              stroke={COLORS[col]}
-              strokeWidth={YARD_EDGE}
             />
             {/* the home ring — carries the colour, encircling the four tokens */}
             <circle
