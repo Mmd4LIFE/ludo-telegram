@@ -432,6 +432,7 @@ async def send_chat(
     )
     if not in_room:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Join the room to chat")
+    # (chat stays available while the game is playing, not just in the waiting room)
     msgs = _CHAT.setdefault(match.code, [])
     msgs.append({
         "id": (msgs[-1]["id"] + 1) if msgs else 1,

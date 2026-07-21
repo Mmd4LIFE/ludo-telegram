@@ -186,6 +186,11 @@ export default function Board({
       width="100%"
       style={{ maxWidth: 440, display: "block", margin: "0 auto", borderRadius: 16 }}
     >
+      <defs>
+        <filter id="dieBlur" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation={CELL * 0.06} />
+        </filter>
+      </defs>
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={16} fill={BOARD_BG} />
 
       <g transform={`rotate(${rot} ${MID} ${MID})`}>
@@ -352,6 +357,9 @@ export default function Board({
           const die = seatDice[String(seat)] ?? null;
           const skin = skinOf(seatSkins[String(seat)]);
           const isTurn = state.current === seat && state.phase !== "finished";
+          // whose die is "hot": the current player, while a die is on show
+          const rolling = isTurn && die != null;
+          const dimmed = state.phase !== "finished" && !isTurn; // other players' dice recede
 
           // Offsets are expressed on SCREEN axes then un-rotated into board space, so a
           // name always sits under its own home whichever way the board is turned.
@@ -371,7 +379,17 @@ export default function Board({
           return (
             <g key={`hud-${seat}`} pointerEvents="none">
               {die != null && (
-                <BoardDie x={dieX} y={dieY} size={dieSize} value={die} skin={skin} rot={rot} />
+                <BoardDie
+                  x={dieX}
+                  y={dieY}
+                  size={dieSize}
+                  value={die}
+                  skin={skin}
+                  rot={rot}
+                  hot={rolling}
+                  dim={dimmed}
+                  turn={state.turn}
+                />
               )}
 
               <g transform={`rotate(${-rot} ${cx + nx} ${cy + ny})`}>
@@ -465,6 +483,9 @@ function BoardDie({
   value,
   skin,
   rot,
+  hot,
+  dim,
+  turn,
 }: {
   x: number;
   y: number;
@@ -472,31 +493,71 @@ function BoardDie({
   value: number;
   skin: { face: string; pip: string; edge: string };
   rot: number;
+  hot?: boolean;
+  dim?: boolean;
+  turn?: number;
 }) {
+  // tumble on a fresh roll: cycle faces briefly, then settle on the real value
+  const [shown, setShown] = useState(value);
+  useEffect(() => {
+    if (!hot) {
+      setShown(value);
+      return;
+    }
+    let i = 0;
+    const id = setInterval(() => {
+      i += 1;
+      if (i >= 5) {
+        clearInterval(id);
+        setShown(value);
+      } else {
+        setShown(1 + Math.floor(Math.random() * 6));
+      }
+    }, 70);
+    return () => clearInterval(id);
+    // re-tumble whenever a new roll lands (value or turn changes)
+  }, [value, turn, hot]);
+
   const half = size / 2;
-  const pips = PIPS[value] ?? [];
+  const pips = PIPS[shown] ?? [];
   const step = size / 3;
+  const s = hot ? 1.35 : 1; // the roller's die is bigger
   return (
-    <g transform={`rotate(${-rot} ${x} ${y})`}>
-      <rect
-        x={x - half}
-        y={y - half}
-        width={size}
-        height={size}
-        rx={size * 0.22}
-        fill={skin.face}
-        stroke={skin.edge}
-        strokeWidth={1.5}
-      />
-      {pips.map(([c, r], i) => (
-        <circle
-          key={i}
-          cx={x - half + step * (c + 0.5)}
-          cy={y - half + step * (r + 0.5)}
-          r={size * 0.082}
-          fill={skin.pip}
+    <g
+      transform={`rotate(${-rot} ${x} ${y})`}
+      opacity={dim ? 0.28 : 1}
+      filter={dim ? "url(#dieBlur)" : undefined}
+      style={{ transition: "opacity 250ms ease" }}
+    >
+      <g
+        style={{ transform: `translate(${x}px, ${y}px) scale(${s})`, transition: "transform 220ms cubic-bezier(0.34,1.6,0.5,1)" }}
+      >
+        {hot && (
+          <circle cx={0} cy={0} r={half * 1.35} fill={skin.face} opacity={0.28}>
+            <animate attributeName="r" values={`${half * 1.2};${half * 1.7};${half * 1.2}`} dur="1s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.35;0.08;0.35" dur="1s" repeatCount="indefinite" />
+          </circle>
+        )}
+        <rect
+          x={-half}
+          y={-half}
+          width={size}
+          height={size}
+          rx={size * 0.22}
+          fill={skin.face}
+          stroke={hot ? "#0e1320" : skin.edge}
+          strokeWidth={hot ? 2.5 : 1.5}
         />
-      ))}
+        {pips.map(([c, r], i) => (
+          <circle
+            key={i}
+            cx={-half + step * (c + 0.5)}
+            cy={-half + step * (r + 0.5)}
+            r={size * 0.082}
+            fill={skin.pip}
+          />
+        ))}
+      </g>
     </g>
   );
 }

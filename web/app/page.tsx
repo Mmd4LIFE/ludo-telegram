@@ -916,6 +916,80 @@ function Pips({ n }: { n: number | null }) {
   );
 }
 
+
+function MatchChat({ code, profile }: { code: string; profile: Profile }) {
+  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.getChat(code).then((c) => alive && setChat(c)).catch(() => {});
+    load();
+    const id = setInterval(load, 2500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [code]);
+  const send = async () => {
+    const t = draft.trim();
+    if (!t || busy) return;
+    setBusy(true);
+    try {
+      haptic("light");
+      setChat(await api.sendChat(code, t));
+      setDraft("");
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card className="flex flex-1 flex-col gap-2 overflow-hidden p-3">
+      <div className="no-scrollbar flex flex-1 flex-col-reverse gap-2 overflow-y-auto">
+        {[...chat].reverse().map((m) => {
+          const mine = m.user_id === profile.id;
+          return (
+            <div key={m.id} className={cn("flex items-end gap-2", mine ? "justify-end" : "justify-start")}>
+              {!mine && (
+                <span className="grid size-6 shrink-0 place-items-center rounded-full bg-secondary text-[10px] font-bold ring-1 ring-white/10">
+                  {(m.name || "P").slice(0, 1).toUpperCase()}
+                </span>
+              )}
+              <div
+                className={cn(
+                  "max-w-[75%] rounded-2xl px-3 py-1.5 text-sm",
+                  mine ? "rounded-br-sm bg-primary text-primary-foreground" : "rounded-bl-sm bg-secondary"
+                )}
+              >
+                {!mine && <div className="text-[10px] font-bold text-muted-foreground">{m.name}</div>}
+                <div className="break-words">{m.text}</div>
+              </div>
+            </div>
+          );
+        })}
+        {chat.length === 0 && (
+          <div className="text-center text-xs text-muted-foreground">Chat with the table.</div>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send()}
+          placeholder="Message…"
+          maxLength={200}
+          className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+        />
+        <Button size="sm" className="h-10" disabled={busy || !draft.trim()} onClick={send}>
+          Send
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 function RollingDie({ die, turn }: { die: number | null; turn: number }) {
   const [shown, setShown] = useState<number | null>(die);
   const [spin, setSpin] = useState(false);
@@ -1132,6 +1206,7 @@ function LiveMatch({
                   : "Tap a glowing token"
                 : `${currentColor}'s turn…`}
           </p>
+          <MatchChat code={code} profile={profile} />
         </>
       )}
     </Shell>

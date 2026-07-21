@@ -3,6 +3,11 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.3.1 — Table talk & the spotlight roll
+- Chat with the table right in the game, in the space below the board.
+- When someone rolls, their die takes the spotlight — it grows and tumbles while the
+  others dim back, so it's obvious whose roll it is.
+
 ## 0.3.0 — The board tells the story
 - Every player now lives on the board: their name, level and their own die sit beside
   their home, so you can see the whole table at a glance.
