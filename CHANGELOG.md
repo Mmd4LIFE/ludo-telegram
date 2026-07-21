@@ -3,6 +3,10 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.3.2 — Live chat
+- The in-game chat now reads like a live-stream feed: compact one-line messages that
+  float up from the bottom and fade as they scroll, with a slim message bar.
+
 ## 0.3.1 — Table talk & the spotlight roll
 - Chat with the table right in the game, in the space below the board.
 - When someone rolls, their die takes the spotlight — it grows and tumbles while the

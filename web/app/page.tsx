@@ -24,6 +24,7 @@ import {
   Gamepad2,
   User,
   Sparkles,
+  Send,
 } from "lucide-react";
 import {
   api,
@@ -49,6 +50,8 @@ import { Card, SectionLabel } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import Board from "@/components/board";
 import { DICE_SKINS, PIPS, skinOf } from "@/lib/skins";
+
+const COLOR_LIST = ["#e5484d", "#30a46c", "#f2b705", "#3e63dd", "#e5709b", "#7b61ff", "#12a4c9"];
 
 const COLOR_HEX: Record<string, string> = {
   RED: "#e5484d",
@@ -925,7 +928,7 @@ function MatchChat({ code, profile }: { code: string; profile: Profile }) {
     let alive = true;
     const load = () => api.getChat(code).then((c) => alive && setChat(c)).catch(() => {});
     load();
-    const id = setInterval(load, 2500);
+    const id = setInterval(load, 2000);
     return () => {
       alive = false;
       clearInterval(id);
@@ -945,48 +948,63 @@ function MatchChat({ code, profile }: { code: string; profile: Profile }) {
       setBusy(false);
     }
   };
+  // deterministic per-user tint for the name (like a live-stream chat)
+  const tint = (id: number) => COLOR_LIST[((id % COLOR_LIST.length) + COLOR_LIST.length) % COLOR_LIST.length];
+
   return (
-    <Card className="flex flex-1 flex-col gap-2 overflow-hidden p-3">
-      <div className="no-scrollbar flex flex-1 flex-col-reverse gap-2 overflow-y-auto">
+    <div className="relative flex flex-1 flex-col justify-end overflow-hidden">
+      {/* messages float up from the bottom; older ones fade out at the top */}
+      <div
+        className="no-scrollbar flex max-h-full flex-col-reverse gap-1.5 overflow-y-auto pb-2"
+        style={{
+          maskImage: "linear-gradient(to top, #000 78%, transparent)",
+          WebkitMaskImage: "linear-gradient(to top, #000 78%, transparent)",
+        }}
+      >
         {[...chat].reverse().map((m) => {
           const mine = m.user_id === profile.id;
           return (
-            <div key={m.id} className={cn("flex items-end gap-2", mine ? "justify-end" : "justify-start")}>
-              {!mine && (
-                <span className="grid size-6 shrink-0 place-items-center rounded-full bg-secondary text-[10px] font-bold ring-1 ring-white/10">
-                  {(m.name || "P").slice(0, 1).toUpperCase()}
-                </span>
-              )}
-              <div
-                className={cn(
-                  "max-w-[75%] rounded-2xl px-3 py-1.5 text-sm",
-                  mine ? "rounded-br-sm bg-primary text-primary-foreground" : "rounded-bl-sm bg-secondary"
-                )}
+            <div key={m.id} className="flex items-start gap-2 pr-2">
+              <span
+                className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
+                style={{ background: tint(m.user_id) }}
               >
-                {!mine && <div className="text-[10px] font-bold text-muted-foreground">{m.name}</div>}
-                <div className="break-words">{m.text}</div>
+                {(m.name || "P").slice(0, 1).toUpperCase()}
+              </span>
+              <div className="min-w-0 leading-snug">
+                <span className="text-[13px] font-bold" style={{ color: mine ? undefined : tint(m.user_id) }}>
+                  {mine ? "You" : m.name}
+                </span>{" "}
+                <span className="text-[13px] text-foreground/90 break-words">{m.text}</span>
               </div>
             </div>
           );
         })}
         {chat.length === 0 && (
-          <div className="text-center text-xs text-muted-foreground">Chat with the table.</div>
+          <div className="text-xs text-muted-foreground">Say something to the table…</div>
         )}
       </div>
-      <div className="flex gap-2">
+
+      {/* slim floating composer */}
+      <div className="flex items-center gap-2 rounded-full bg-white/8 p-1 pl-4 ring-1 ring-white/10 backdrop-blur">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder="Message…"
           maxLength={200}
-          className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+          className="h-8 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
-        <Button size="sm" className="h-10" disabled={busy || !draft.trim()} onClick={send}>
-          Send
-        </Button>
+        <button
+          onClick={send}
+          disabled={busy || !draft.trim()}
+          className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition active:scale-90 disabled:opacity-40"
+          aria-label="Send"
+        >
+          <Send className="size-4" />
+        </button>
       </div>
-    </Card>
+    </div>
   );
 }
 
