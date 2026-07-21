@@ -965,18 +965,28 @@ function MatchChat({ code, profile }: { code: string; profile: Profile }) {
         {[...chat].reverse().map((m) => {
           const mine = m.user_id === profile.id;
           return (
-            <div key={m.id} className="flex items-start gap-2 pr-2">
-              <span
-                className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
-                style={{ background: tint(m.user_id) }}
+            <div key={m.id} className={cn("flex", mine ? "justify-end pl-6" : "justify-start pr-6")}>
+              <div
+                className={cn(
+                  "flex max-w-[88%] items-start gap-2",
+                  mine && "flex-row-reverse text-right"
+                )}
               >
-                {(m.name || "P").slice(0, 1).toUpperCase()}
-              </span>
-              <div className="min-w-0 leading-snug">
-                <span className="text-[13px] font-bold" style={{ color: mine ? undefined : tint(m.user_id) }}>
-                  {mine ? "You" : m.name}
-                </span>{" "}
-                <span className="text-[13px] text-foreground/90 break-words">{m.text}</span>
+                <span
+                  className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
+                  style={{ background: mine ? "var(--color-primary)" : tint(m.user_id) }}
+                >
+                  {((mine ? profile.first_name : m.name) || "P").slice(0, 1).toUpperCase()}
+                </span>
+                <div className="min-w-0 leading-snug">
+                  <span
+                    className="text-[13px] font-bold"
+                    style={{ color: mine ? "var(--color-primary)" : tint(m.user_id) }}
+                  >
+                    {mine ? "You" : m.name}
+                  </span>{" "}
+                  <span className="text-[13px] text-foreground/90 break-words">{m.text}</span>
+                </div>
               </div>
             </div>
           );
