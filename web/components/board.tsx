@@ -357,9 +357,11 @@ export default function Board({
           const die = seatDice[String(seat)] ?? null;
           const skin = skinOf(seatSkins[String(seat)]);
           const isTurn = state.current === seat && state.phase !== "finished";
-          // whose die is "hot": the current player, while a die is on show
-          const rolling = isTurn && die != null;
-          const dimmed = state.phase !== "finished" && !isTurn; // other players' dice recede
+          // Reveal a die only once its owner has ROLLED (move phase). During the roll
+          // phase the die stays dimmed/blurred — it un-blurs and tumbles when the roll
+          // lands, so a stale previous value never flashes before the player rolls.
+          const rolling = isTurn && die != null && state.phase === "move";
+          const dimmed = state.phase !== "finished" && !rolling;
 
           // Offsets are expressed on SCREEN axes then un-rotated into board space, so a
           // name always sits under its own home whichever way the board is turned.
