@@ -920,7 +920,15 @@ function Pips({ n }: { n: number | null }) {
 }
 
 
-function MatchChat({ code, profile }: { code: string; profile: Profile }) {
+function MatchChat({
+  code,
+  profile,
+  colors,
+}: {
+  code: string;
+  profile: Profile;
+  colors: Record<number, string>;
+}) {
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -948,8 +956,10 @@ function MatchChat({ code, profile }: { code: string; profile: Profile }) {
       setBusy(false);
     }
   };
-  // deterministic per-user tint for the name (like a live-stream chat)
-  const tint = (id: number) => COLOR_LIST[((id % COLOR_LIST.length) + COLOR_LIST.length) % COLOR_LIST.length];
+  // a speaker's colour is their in-game colour; fall back to a stable tint otherwise
+  const tint = (id: number) =>
+    colors[id] ?? COLOR_LIST[((id % COLOR_LIST.length) + COLOR_LIST.length) % COLOR_LIST.length];
+  const shadow = "0 1px 3px rgba(0,0,0,0.7)";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -965,27 +975,32 @@ function MatchChat({ code, profile }: { code: string; profile: Profile }) {
         {[...chat].reverse().map((m) => {
           const mine = m.user_id === profile.id;
           return (
-            <div key={m.id} className={cn("flex", mine ? "justify-end pl-6" : "justify-start pr-6")}>
+            <div key={m.id} className={cn("flex", mine ? "justify-end pl-8" : "justify-start pr-8")}>
               <div
                 className={cn(
                   "flex max-w-[88%] items-start gap-2",
                   mine && "flex-row-reverse text-right"
                 )}
               >
-                <span
-                  className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
-                  style={{ background: mine ? "var(--color-primary)" : tint(m.user_id) }}
-                >
-                  {((mine ? profile.first_name : m.name) || "P").slice(0, 1).toUpperCase()}
-                </span>
-                <div className="min-w-0 leading-snug">
+                {!mine && (
                   <span
-                    className="text-[13px] font-bold"
-                    style={{ color: mine ? "var(--color-primary)" : tint(m.user_id) }}
+                    className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
+                    style={{ background: tint(m.user_id) }}
                   >
-                    {mine ? "You" : m.name}
-                  </span>{" "}
-                  <span className="text-[13px] text-foreground/90 break-words">{m.text}</span>
+                    {(m.name || "P").slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+                <div className="min-w-0 leading-snug" style={{ textShadow: shadow }}>
+                  {!mine && (
+                    <>
+                      <span className="text-[13px] font-bold" style={{ color: tint(m.user_id) }}>
+                        {m.name}
+                      </span>{" "}
+                    </>
+                  )}
+                  <span className={cn("text-[13px] break-words", mine ? "text-primary font-medium" : "text-white")}>
+                    {m.text}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1238,7 +1253,18 @@ function LiveMatch({
             </p>
           </div>
           {/* chat fills the rest; its input is pinned, its feed scrolls internally */}
-          <MatchChat code={code} profile={profile} />
+          <MatchChat
+            code={code}
+            profile={profile}
+            colors={Object.fromEntries(
+              Object.entries(seatUser)
+                .filter(([, uid]) => uid != null)
+                .map(([seat, uid]) => [
+                  uid as number,
+                  COLOR_HEX[state.players[Number(seat)]?.color] ?? "#eef1f6",
+                ])
+            )}
+          />
         </>
       )}
     </main>
