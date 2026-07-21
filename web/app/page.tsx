@@ -982,14 +982,12 @@ function MatchChat({
                   mine && "flex-row-reverse text-right"
                 )}
               >
-                {!mine && (
-                  <span
-                    className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
-                    style={{ background: tint(m.user_id) }}
-                  >
-                    {(m.name || "P").slice(0, 1).toUpperCase()}
-                  </span>
-                )}
+                <span
+                  className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white ring-1 ring-white/20"
+                  style={{ background: tint(m.user_id) }}
+                >
+                  {(m.name || "P").slice(0, 1).toUpperCase()}
+                </span>
                 <div className="min-w-0 leading-snug" style={{ textShadow: shadow }}>
                   {!mine && (
                     <>
@@ -998,9 +996,7 @@ function MatchChat({
                       </span>{" "}
                     </>
                   )}
-                  <span className={cn("text-[13px] break-words", mine ? "text-primary font-medium" : "text-white")}>
-                    {m.text}
-                  </span>
+                  <span className="text-[13px] text-white break-words">{m.text}</span>
                 </div>
               </div>
             </div>
