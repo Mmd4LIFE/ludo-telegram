@@ -952,10 +952,11 @@ function MatchChat({ code, profile }: { code: string; profile: Profile }) {
   const tint = (id: number) => COLOR_LIST[((id % COLOR_LIST.length) + COLOR_LIST.length) % COLOR_LIST.length];
 
   return (
-    <div className="relative flex flex-1 flex-col justify-end overflow-hidden">
-      {/* messages float up from the bottom; older ones fade out at the top */}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* feed scrolls internally so it never pushes the composer; newest sits at the
+          bottom just above the input, older lines fade out as they rise */}
       <div
-        className="no-scrollbar flex max-h-full flex-col-reverse gap-1.5 overflow-y-auto pb-2"
+        className="no-scrollbar flex min-h-0 flex-1 flex-col-reverse gap-1.5 overflow-y-auto pb-2"
         style={{
           maskImage: "linear-gradient(to top, #000 78%, transparent)",
           WebkitMaskImage: "linear-gradient(to top, #000 78%, transparent)",
@@ -985,8 +986,8 @@ function MatchChat({ code, profile }: { code: string; profile: Profile }) {
         )}
       </div>
 
-      {/* slim floating composer */}
-      <div className="flex items-center gap-2 rounded-full bg-white/8 p-1 pl-4 ring-1 ring-white/10 backdrop-blur">
+      {/* slim composer — pinned at the bottom, always in the same spot */}
+      <div className="flex shrink-0 items-center gap-2 rounded-full bg-white/8 p-1 pl-4 ring-1 ring-white/10 backdrop-blur">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -1135,8 +1136,8 @@ function LiveMatch({
   const rematchNeeded = rematch.humanIds.length || Object.values(seatUser).filter(Boolean).length;
 
   return (
-    <Shell>
-      <div className="flex items-center justify-between">
+    <main className="mx-auto flex h-dvh w-full max-w-md flex-col gap-3 overflow-hidden px-4 pb-3 pt-4">
+      <div className="flex shrink-0 items-center justify-between">
         <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-bold tracking-wider ring-1 ring-white/10">
           ROOM {code}
         </span>
@@ -1187,7 +1188,7 @@ function LiveMatch({
 
       {/* The board carries everything now: each player's name, level, die and the
           draining turn ring — so there's no player strip or turn banner above it. */}
-      <Card className="p-2">
+      <Card className="shrink-0 p-2">
         <Board
           state={state}
           legal={legal}
@@ -1207,27 +1208,30 @@ function LiveMatch({
 
       {!finished && (
         <>
-          <RollButton
-            active={myTurn && state.phase === "roll"}
-            clock={clock}
-            onRoll={() => {
-              haptic("medium");
-              sock?.roll();
-            }}
-          />
-          <p className="text-center text-[11px] text-muted-foreground">
-            {noMoves
-              ? `No moves for ${currentColor} — passing…`
-              : myTurn
-                ? state.phase === "roll"
-                  ? "Your turn"
-                  : "Tap a glowing token"
-                : `${currentColor}'s turn…`}
-          </p>
+          <div className="shrink-0">
+            <RollButton
+              active={myTurn && state.phase === "roll"}
+              clock={clock}
+              onRoll={() => {
+                haptic("medium");
+                sock?.roll();
+              }}
+            />
+            <p className="mt-1 text-center text-[11px] text-muted-foreground">
+              {noMoves
+                ? `No moves for ${currentColor} — passing…`
+                : myTurn
+                  ? state.phase === "roll"
+                    ? "Your turn"
+                    : "Tap a glowing token"
+                  : `${currentColor}'s turn…`}
+            </p>
+          </div>
+          {/* chat fills the rest; its input is pinned, its feed scrolls internally */}
           <MatchChat code={code} profile={profile} />
         </>
       )}
-    </Shell>
+    </main>
   );
 }
 

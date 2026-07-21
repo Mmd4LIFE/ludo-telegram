@@ -4,6 +4,8 @@ Player-facing notes. Keep this friendly and free of internal/technical reference
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
 ## 0.3.2 — Live chat
+- The message bar now stays put at the bottom; new messages stack just above it and the
+  feed scrolls on its own instead of shoving the input around.
 - The in-game chat now reads like a live-stream feed: compact one-line messages that
   float up from the bottom and fade as they scroll, with a slim message bar.
 
