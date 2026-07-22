@@ -172,13 +172,23 @@ export default function Board({
   const groups = new Map<string, Tok[]>();
   toks.forEach((t) => (groups.get(keyOf(t)) ?? groups.set(keyOf(t), []).get(keyOf(t))!).push(t));
 
-  // destination markers for the current mover's legal moves
-  const dests = myTurn
-    ? legal.map((m) => {
-        const [c, r] = tokenCell(moverColor, m.dst, m.token_index);
-        return { c, r, capture: m.captures.length > 0, dst: m.dst };
-      })
-    : [];
+  // Destination markers reveal the die's outcome (position + die), so hold them back
+  // until the die has finished tumbling — they land together with the number instead of
+  // spoiling it first. ~360ms matches the BoardDie tumble.
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    setRevealed(false);
+    const id = setTimeout(() => setRevealed(true), 360);
+    return () => clearTimeout(id);
+  }, [state.turn, state.die, state.phase]);
+
+  const dests =
+    myTurn && revealed
+      ? legal.map((m) => {
+          const [c, r] = tokenCell(moverColor, m.dst, m.token_index);
+          return { c, r, capture: m.captures.length > 0, dst: m.dst };
+        })
+      : [];
 
   return (
     <svg
