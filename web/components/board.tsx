@@ -174,13 +174,15 @@ export default function Board({
 
   // Destination markers reveal the die's outcome (position + die), so hold them back
   // until the die has finished tumbling — they land together with the number instead of
-  // spoiling it first. ~360ms matches the BoardDie tumble.
-  const [revealed, setRevealed] = useState(false);
+  // spoiling it first. Derive `revealed` from the roll's identity so it's false
+  // *synchronously* on a new roll (a lagging effect flashed the old markers for a frame).
+  const rollKey = `${state.turn}:${state.die}:${state.phase}`;
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
   useEffect(() => {
-    setRevealed(false);
-    const id = setTimeout(() => setRevealed(true), 360);
+    const id = setTimeout(() => setRevealedKey(rollKey), 360); // ~ BoardDie tumble
     return () => clearTimeout(id);
-  }, [state.turn, state.die, state.phase]);
+  }, [rollKey]);
+  const revealed = revealedKey === rollKey;
 
   const dests =
     myTurn && revealed
