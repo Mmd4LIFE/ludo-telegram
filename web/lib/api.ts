@@ -103,6 +103,7 @@ export interface ChatMessage {
   user_id: number;
   name: string;
   text: string;
+  edited: boolean;
 }
 
 export interface DiceEntry {
@@ -172,4 +173,8 @@ export const api = {
     req<AdminUser[]>("GET", `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   sendChat: (code: string, text: string) =>
     req<ChatMessage[]>("POST", `/api/matches/${code}/chat`, { text }),
+  editChat: (code: string, id: number, text: string) =>
+    req<ChatMessage[]>("PATCH", `/api/matches/${code}/chat/${id}`, { text }),
+  deleteChat: (code: string, id: number) =>
+    req<ChatMessage[]>("DELETE", `/api/matches/${code}/chat/${id}`),
 };

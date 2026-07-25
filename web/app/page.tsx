@@ -25,6 +25,8 @@ import {
   User,
   Sparkles,
   Send,
+  Pencil,
+  Check,
 } from "lucide-react";
 import {
   api,
@@ -116,12 +118,16 @@ function Home() {
   const [seatLevels, setSeatLevels] = useState<Record<string, number>>({});
   const [seatSkins, setSeatSkins] = useState<Record<string, string>>({});
   const [seatDice, setSeatDice] = useState<Record<string, number>>({});
+  const [removedSeats, setRemovedSeats] = useState<number[]>([]);
   const [clock, setClock] = useState<Clock | null>(null);
   const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
     votes: [],
     humanIds: [],
   });
   const sockRef = useRef<MatchSocket | null>(null);
+  const myIdRef = useRef<number | null>(null);
+  const leaveMatchRef = useRef<(() => void) | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // ---- live match socket ----
   const enterMatch = useCallback((code: string) => {
@@ -139,6 +145,7 @@ function Home() {
         setSeatLevels(p.seat_levels ?? {});
         setSeatSkins(p.seat_skins ?? {});
         setSeatDice(p.seat_last_die ?? {});
+        setRemovedSeats(p.removed_seats ?? []);
         setClock({
           deadline: p.deadline,
           now: p.now,
@@ -152,6 +159,12 @@ function Home() {
         });
       } else if (msg.type === "rematch_ready") {
         enterMatch(String(msg.code));
+      } else if (msg.type === "kicked") {
+        if (msg.user_id === myIdRef.current) {
+          notify("warning");
+          setNotice("You were removed for missing your turns.");
+          leaveMatchRef.current?.();
+        }
       }
     });
     sock.connect();
@@ -165,6 +178,7 @@ function Home() {
     setState(null);
     setRoom(null);
   }, []);
+  leaveMatchRef.current = leaveMatch;
 
   // ---- auth + deep-link ----
   useEffect(() => {
@@ -172,6 +186,7 @@ function Home() {
     authenticate()
       .then((p) => {
         setProfile(p);
+        myIdRef.current = p.id;
         const sp = startParam();
         if (sp && sp.startsWith("rm-")) {
           const code = sp.slice(3).toUpperCase();
@@ -246,6 +261,8 @@ function Home() {
 
   if (!profile) return <Splash />;
 
+  const noticeBanner = notice ? <NoticeBanner text={notice} onClose={() => setNotice(null)} /> : null;
+
   if (showAdmin) return <AdminPanel onBack={() => setShowAdmin(false)} />;
 
   if (matchCode && state)
@@ -260,6 +277,7 @@ function Home() {
         seatLevels={seatLevels}
         seatSkins={seatSkins}
         seatDice={seatDice}
+        removedSeats={removedSeats}
         clock={clock}
         rematch={rematch}
         sock={sockRef.current}
@@ -297,6 +315,7 @@ function Home() {
       {view === "friends" && <ComingSoon title="Friends" />}
       {view === "ranks" && <ComingSoon title="Ranks" />}
       <BottomNav view={view} onChange={setView} />
+      {noticeBanner}
     </>
   );
 }
@@ -313,6 +332,21 @@ function Shell({ children, className }: { children: ReactNode; className?: strin
     >
       {children}
     </main>
+  );
+}
+
+function NoticeBanner({ text, onClose }: { text: string; onClose: () => void }) {
+  useEffect(() => {
+    const id = setTimeout(onClose, 4500);
+    return () => clearTimeout(id);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-3">
+      <div className="lb-pop flex max-w-md items-center gap-2 rounded-2xl bg-red/90 px-4 py-2.5 text-sm font-semibold text-white shadow-lg ring-1 ring-white/20 backdrop-blur">
+        <AlertTriangle className="size-4 shrink-0" />
+        <span>{text}</span>
+      </div>
+    </div>
   );
 }
 
@@ -932,6 +966,8 @@ function MatchChat({
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [menuId, setMenuId] = useState<number | null>(null); // own message tapped
+  const [editingId, setEditingId] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
     const load = () => api.getChat(code).then((c) => alive && setChat(c)).catch(() => {});
@@ -948,7 +984,12 @@ function MatchChat({
     setBusy(true);
     try {
       haptic("light");
-      setChat(await api.sendChat(code, t));
+      if (editingId != null) {
+        setChat(await api.editChat(code, editingId, t));
+        setEditingId(null);
+      } else {
+        setChat(await api.sendChat(code, t));
+      }
       setDraft("");
     } catch {
       /* ignore */
@@ -956,15 +997,24 @@ function MatchChat({
       setBusy(false);
     }
   };
-  // a speaker's colour is their in-game colour; fall back to a stable tint otherwise
+  const del = async (id: number) => {
+    setMenuId(null);
+    try {
+      setChat(await api.deleteChat(code, id));
+      if (editingId === id) {
+        setEditingId(null);
+        setDraft("");
+      }
+    } catch {
+      /* ignore */
+    }
+  };
   const tint = (id: number) =>
     colors[id] ?? COLOR_LIST[((id % COLOR_LIST.length) + COLOR_LIST.length) % COLOR_LIST.length];
   const shadow = "0 1px 3px rgba(0,0,0,0.7)";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* feed scrolls internally so it never pushes the composer; newest sits at the
-          bottom just above the input, older lines fade out as they rise */}
       <div
         className="no-scrollbar flex min-h-0 flex-1 flex-col-reverse gap-1.5 overflow-y-auto pb-2"
         style={{
@@ -981,6 +1031,8 @@ function MatchChat({
                   "flex max-w-[88%] items-start gap-2",
                   mine && "flex-row-reverse text-right"
                 )}
+                onClick={mine ? () => setMenuId(menuId === m.id ? null : m.id) : undefined}
+                style={{ cursor: mine ? "pointer" : "default" }}
               >
                 <span
                   className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white ring-1 ring-white/20"
@@ -997,6 +1049,34 @@ function MatchChat({
                     </>
                   )}
                   <span className="text-[13px] text-white break-words">{m.text}</span>
+                  {m.edited && <span className="text-[10px] text-white/50"> (edited)</span>}
+                  {/* your own message: tap to edit / delete */}
+                  {mine && menuId === m.id && (
+                    <span className="ml-2 inline-flex items-center gap-1 align-middle">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingId(m.id);
+                          setDraft(m.text);
+                          setMenuId(null);
+                        }}
+                        className="grid size-6 place-items-center rounded-full bg-white/15 text-white active:scale-90"
+                        aria-label="Edit"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          del(m.id);
+                        }}
+                        className="grid size-6 place-items-center rounded-full bg-red/80 text-white active:scale-90"
+                        aria-label="Delete"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -1007,13 +1087,27 @@ function MatchChat({
         )}
       </div>
 
-      {/* slim composer — pinned at the bottom, always in the same spot */}
+      {editingId != null && (
+        <div className="mb-1 flex items-center justify-between px-2 text-[11px] text-muted-foreground">
+          <span>Editing your message…</span>
+          <button
+            onClick={() => {
+              setEditingId(null);
+              setDraft("");
+            }}
+            className="font-bold text-primary"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       <div className="flex shrink-0 items-center gap-2 rounded-full bg-white/8 p-1 pl-4 ring-1 ring-white/10 backdrop-blur">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Message…"
+          placeholder={editingId != null ? "Edit message…" : "Message…"}
           maxLength={200}
           className="h-8 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
@@ -1021,9 +1115,9 @@ function MatchChat({
           onClick={send}
           disabled={busy || !draft.trim()}
           className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition active:scale-90 disabled:opacity-40"
-          aria-label="Send"
+          aria-label={editingId != null ? "Save" : "Send"}
         >
-          <Send className="size-4" />
+          {editingId != null ? <Check className="size-4" /> : <Send className="size-4" />}
         </button>
       </div>
     </div>
@@ -1120,6 +1214,7 @@ function LiveMatch({
   seatLevels,
   seatSkins,
   seatDice,
+  removedSeats,
   clock,
   rematch,
   sock,
@@ -1134,6 +1229,7 @@ function LiveMatch({
   seatLevels: Record<string, number>;
   seatSkins: Record<string, string>;
   seatDice: Record<string, number>;
+  removedSeats: number[];
   clock: Clock | null;
   rematch: { votes: number[]; humanIds: number[] };
   sock: MatchSocket | null;
@@ -1219,6 +1315,7 @@ function LiveMatch({
           seatLevels={seatLevels}
           seatSkins={seatSkins}
           seatDice={seatDice}
+          removedSeats={removedSeats}
           clock={clock}
           onMove={(ti) => {
             haptic("light");

@@ -41,7 +41,7 @@ from app.ludo import (
     register_roll,
     roll_die,
 )
-from app.ludo.board import Color
+from app.ludo.board import HOME, TOKENS_PER_PLAYER, Color
 from app.ludo.bots import choose_move
 from app.game.connection import hub
 from app.models import Match, MatchStatus
@@ -63,6 +63,9 @@ class MatchRuntime:
         self.seat_levels: dict[int, int] = {}  # seat -> level (filled on connect)
         self.seat_skins: dict[int, str] = {}   # seat -> dice skin (filled on connect)
         self.seat_last_die: dict[int, int] = {}  # seat -> the face they last rolled
+        self.seat_missed: dict[int, int] = {}    # seat -> consecutive roll timeouts
+        self.kicked: set[int] = set()            # user_ids auto-kicked for inactivity
+        self.removed_seats: set[int] = set()     # seats whose player was removed
         for s in match.seats:
             self.seat_user[s.seat_index] = s.user_id
             self.seat_is_bot[s.seat_index] = s.is_bot
@@ -168,7 +171,15 @@ class MatchRuntime:
                 got = await self._drain_for(seat, "roll", settings.TURN_TIMEOUT_SECONDS)
                 self._deadline = None
                 if got is None:
-                    logger.info("seat %s timed out on roll (%s)", seat, self.code)
+                    self.seat_missed[seat] = self.seat_missed.get(seat, 0) + 1
+                    logger.info(
+                        "seat %s timed out on roll (%s), missed=%d",
+                        seat, self.code, self.seat_missed[seat],
+                    )
+                    if self.seat_missed[seat] >= settings.MAX_MISSED_TURNS:
+                        await self._kick(seat)
+                else:
+                    self.seat_missed[seat] = 0
             else:
                 await self._think()
             register_roll(self.state, roll_die(self._rng))
@@ -218,6 +229,7 @@ class MatchRuntime:
             "seat_levels": {str(k): v for k, v in self.seat_levels.items()},
             "seat_skins": {str(k): v for k, v in self.seat_skins.items()},
             "seat_last_die": {str(k): v for k, v in self.seat_last_die.items()},
+            "removed_seats": sorted(self.removed_seats),
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
             # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
             "deadline": self._deadline,
@@ -237,6 +249,26 @@ class MatchRuntime:
             if self.state.phase is not Phase.FINISHED:
                 m.status = MatchStatus.PLAYING
             await session.commit()
+
+    async def _kick(self, seat: int) -> None:
+        """A human who keeps missing rolls is REMOVED (not replaced by a bot): their
+        pieces are cleared off the board and their turns are skipped for the rest of the
+        game, and their client is told to return to the lobby.
+
+        Clearing = send all four tokens to HOME. That makes the engine treat the seat as
+        out of the running (its turns are skipped and it can never win — it's only added
+        to the ranking as a straggler at game over, i.e. last), without touching the pure
+        engine's rules. The client hides a removed seat entirely.
+        """
+        uid = self.seat_user.get(seat)
+        if uid is None:
+            return
+        self.state.players[seat].tokens = [HOME] * TOKENS_PER_PLAYER
+        self.removed_seats.add(seat)
+        self.seat_missed[seat] = 0
+        self.kicked.add(uid)
+        await hub.broadcast(self.code, {"type": "kicked", "user_id": uid})
+        logger.info("seat %s (user %s) removed from %s for inactivity", seat, uid, self.code)
 
     async def _abandon(self) -> None:
         """Mark a viewer-less human match abandoned so it stops using the box."""

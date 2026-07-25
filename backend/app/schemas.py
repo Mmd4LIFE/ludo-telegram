@@ -165,6 +165,7 @@ class ChatMessage(BaseModel):
     user_id: int
     name: str
     text: str
+    edited: bool = False
 
 
 class SendChatRequest(BaseModel):

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     # Gameplay
     TURN_TIMEOUT_SECONDS: int = 20          # a player has this long to act, else auto-play
+    MAX_MISSED_TURNS: int = 2               # miss this many rolls in a row → auto-kicked
     BOT_THINK_MIN: float = 1.2
     BOT_THINK_MAX: float = 2.4
     ROLL_REVEAL_SECONDS: float = 1.0        # hold on the rolled die so everyone sees it

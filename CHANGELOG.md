@@ -3,6 +3,13 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.4.0 — Rules & housekeeping
+- A six now earns exactly one extra roll — roll a six twice in a row and the turn moves
+  on (no more endless bonus).
+- Keep missing your turns and you're removed from the game: your pieces come off the
+  board and play continues without you.
+- You can now edit or delete your own chat messages — just tap one.
+
 ## 0.3.2 — Live chat
 - The message bar now stays put at the bottom; new messages stack just above it and the
   feed scrolls on its own instead of shoving the input around.

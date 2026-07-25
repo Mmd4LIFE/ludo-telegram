@@ -439,6 +439,50 @@ async def send_chat(
         "user_id": user.id,
         "name": user.first_name or "Player",
         "text": text,
+        "edited": False,
     })
     del msgs[:-_CHAT_MAX]
     return [ChatMessage(**m) for m in msgs]
+
+
+@router.patch("/{code}/chat/{msg_id}", response_model=list[ChatMessage])
+async def edit_chat(
+    code: str,
+    msg_id: int,
+    body: SendChatRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Edit one of your own messages."""
+    match = await _load_room(session, code)
+    text = body.text.strip()[:200]
+    if not text:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty message")
+    msgs = _CHAT.get(match.code, [])
+    m = next((m for m in msgs if m["id"] == msg_id), None)
+    if m is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+    if m["user_id"] != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your message")
+    m["text"] = text
+    m["edited"] = True
+    return [ChatMessage(**m) for m in msgs]
+
+
+@router.delete("/{code}/chat/{msg_id}", response_model=list[ChatMessage])
+async def delete_chat(
+    code: str,
+    msg_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete one of your own messages."""
+    match = await _load_room(session, code)
+    msgs = _CHAT.get(match.code, [])
+    m = next((m for m in msgs if m["id"] == msg_id), None)
+    if m is None:
+        return [ChatMessage(**x) for x in msgs]
+    if m["user_id"] != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your message")
+    _CHAT[match.code] = [x for x in msgs if x["id"] != msg_id]
+    return [ChatMessage(**x) for x in _CHAT[match.code]]

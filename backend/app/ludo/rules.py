@@ -61,11 +61,11 @@ def roll_die(rng: random.Random | None = None) -> int:
 
 
 def register_roll(state: GameState, die: int) -> None:
-    """Record a die value on the state and handle the triple-six forfeit.
+    """Record a die value on the state and count consecutive sixes.
 
-    Mutates ``state`` in place. On a third consecutive 6 the turn is forfeited: the die
-    is discarded, the six-counter reset, and play advances to the next active player
-    (state returns to ROLL). Otherwise the state moves to MOVE with this die.
+    Mutates ``state`` in place, moving to MOVE with this die. A six grants exactly ONE
+    extra roll: the bonus is not granted again on a second consecutive six (see
+    ``apply_move``), so the six-streak never needs a forfeit — it simply stops paying out.
     """
     if state.phase is not Phase.ROLL:
         raise ValueError(f"cannot roll in phase {state.phase}")
@@ -77,15 +77,13 @@ def register_roll(state: GameState, die: int) -> None:
     else:
         state.consecutive_sixes = 0
 
-    if state.consecutive_sixes >= 3:
-        # Third six in a row — whole turn is void (classic Ludo penalty).
-        state.consecutive_sixes = 0
-        state.die = None
-        _advance_to_next_player(state)
-        return
-
     state.die = die
     state.phase = Phase.MOVE
+
+
+def _six_pays_extra(state: GameState) -> bool:
+    """A six grants a bonus roll only the first time — not on the second in a row."""
+    return state.die == 6 and state.consecutive_sixes < 2
 
 
 # --- legal moves ------------------------------------------------------------
@@ -185,10 +183,9 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
     if move is None:
         if legal_moves(state):
             raise ValueError("cannot pass: legal moves exist")
-        # A six still earns another roll even when it cannot be played — you keep the
-        # reward for the six. The triple-six forfeit caps the streak, so a player who
-        # can never move still hands the turn on rather than rolling forever.
-        extra = die == 6
+        # A six still earns its one bonus roll even when it cannot be played — you keep
+        # the reward. A second consecutive six pays nothing, so it can't loop forever.
+        extra = _six_pays_extra(state)
         _end_turn(state, extra_turn=extra)
         return ApplyResult(None, [], False, extra, state.phase is Phase.FINISHED)
 
@@ -208,7 +205,7 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
         player.finished_at = state.turn
         state.ranking.append(state.current)
 
-    extra_turn = die == 6 or bool(move.captures) or reached_home
+    extra_turn = _six_pays_extra(state) or bool(move.captures) or reached_home
     _end_turn(state, extra_turn=extra_turn)
 
     return ApplyResult(

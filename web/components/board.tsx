@@ -137,6 +137,7 @@ export default function Board({
   seatLevels,
   seatDice,
   seatSkins,
+  removedSeats,
   clock,
   onMove,
 }: {
@@ -148,9 +149,11 @@ export default function Board({
   seatLevels: Record<string, number>;
   seatDice: Record<string, number>;
   seatSkins: Record<string, string>;
+  removedSeats: number[];
   clock: { deadline: number | null; now: number; recvAt: number; turnSeconds: number } | null;
   onMove: (tokenIndex: number) => void;
 }) {
+  const removed = new Set(removedSeats);
   const movable = new Set(legal.map((m) => m.token_index));
   const myTurn = mySeat !== null && state.current === mySeat && state.phase === "move";
   const moverColor = state.players[state.current]?.color ?? "RED";
@@ -161,6 +164,7 @@ export default function Board({
   type Tok = { seat: number; ti: number; color: string; prog: number; canMove: boolean };
   const toks: Tok[] = [];
   state.players.forEach((p, seat) => {
+    if (removed.has(seat)) return; // a removed player's pieces are gone
     p.tokens.forEach((prog, ti) => {
       toks.push({
         seat, ti, color: p.color, prog,
@@ -211,9 +215,9 @@ export default function Board({
           const seat = state.players.findIndex((p) => p.color === col);
           const isTurn = seat >= 0 && state.current === seat && state.phase !== "finished";
           // Your own clock is the Roll button, so only opponents' homes tick.
-          const ticking = isTurn && seat !== mySeat && !!clock?.deadline;
+          const ticking = isTurn && seat !== mySeat && !!clock?.deadline && !removed.has(seat);
           return (
-          <g key={col}>
+          <g key={col} opacity={removed.has(seat) ? 0.35 : 1}>
             <rect
               x={(y.ox + YARD_INSET) * CELL}
               y={(y.oy + YARD_INSET) * CELL}
@@ -364,9 +368,10 @@ export default function Board({
           const yard = YARD[p.color];
           if (!yard) return null;
           const { cx, cy, r } = homeCircle(yard.slots);
-          const name = seatNames[String(seat)] ?? "";
+          const gone = removed.has(seat);
+          const name = gone ? "Left" : (seatNames[String(seat)] ?? "");
           const level = seatLevels[String(seat)] ?? 1;
-          const die = seatDice[String(seat)] ?? null;
+          const die = gone ? null : (seatDice[String(seat)] ?? null);
           const skin = skinOf(seatSkins[String(seat)]);
           const isTurn = state.current === seat && state.phase !== "finished";
           // Reveal a die only once its owner has ROLLED (move phase). During the roll
@@ -414,12 +419,13 @@ export default function Board({
                   dominantBaseline="middle"
                   fontSize={CELL * 0.42}
                   fontWeight={700}
-                  fill={seat === mySeat ? COLORS[p.color] : "#5b6478"}
+                  fill={gone ? "#98a2b6" : seat === mySeat ? COLORS[p.color] : "#5b6478"}
                 >
-                  {seat === mySeat ? `${name} (you)` : name}
+                  {gone ? "Left" : seat === mySeat ? `${name} (you)` : name}
                 </text>
               </g>
 
+              {!gone && (
               <g transform={`rotate(${-rot} ${cx + lx} ${cy + ly})`}>
                 <circle cx={cx + lx} cy={cy + ly} r={CELL * 0.32} fill={COLORS[p.color]} />
                 <text
@@ -434,6 +440,7 @@ export default function Board({
                   {level}
                 </text>
               </g>
+              )}
             </g>
           );
         })}

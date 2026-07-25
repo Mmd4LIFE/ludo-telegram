@@ -74,17 +74,18 @@ def test_extra_turn_on_six() -> None:
     _check("same player still on turn", s.current == 0 and s.phase is Phase.ROLL)
 
 
-def test_triple_six_forfeits() -> None:
+def test_second_six_ends_turn() -> None:
+    """A six pays one bonus roll; a second six in a row pays nothing (no loop)."""
     s = initial_state(4)
-    # release a token so the player actually has moves between sixes
     register_roll(s, 6)
-    apply_move(s, legal_moves(s)[0])            # token0 -> progress 0, extra turn
-    register_roll(s, 6)                          # second six
+    res1 = apply_move(s, legal_moves(s)[0])      # release token0, extra turn
+    _check("first six grants an extra turn", res1.extra_turn and s.current == 0)
+    register_roll(s, 6)                          # second six in a row
     _check("second six counted", s.consecutive_sixes == 2)
-    apply_move(s, legal_moves(s)[0])            # move, extra turn again
-    register_roll(s, 6)                          # THIRD six -> forfeit
-    _check("triple six forfeits the turn", s.current == 1 and s.phase is Phase.ROLL)
-    _check("six counter reset after forfeit", s.consecutive_sixes == 0)
+    res2 = apply_move(s, legal_moves(s)[0])      # move counts, but no more bonus
+    _check("second six does NOT grant an extra turn", not res2.extra_turn)
+    _check("turn passes to the next player", s.current == 1 and s.phase is Phase.ROLL)
+    _check("six counter reset on turn change", s.consecutive_sixes == 0)
 
 
 # --- capture ----------------------------------------------------------------
@@ -204,7 +205,7 @@ def run_all() -> None:
         test_geometry,
         test_release_requires_six,
         test_extra_turn_on_six,
-        test_triple_six_forfeits,
+        test_second_six_ends_turn,
         test_capture_sends_home_and_grants_turn,
         test_safe_square_protects_owner_only,
         test_six_with_no_move_keeps_the_turn,
