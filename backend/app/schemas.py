@@ -166,10 +166,14 @@ class ChatMessage(BaseModel):
     name: str
     text: str
     edited: bool = False
+    reply_to: int | None = None      # id of the message this replies to
+    reply_name: str | None = None    # snapshot of who is being replied to
+    reply_text: str | None = None    # snapshot of the replied-to text (truncated)
 
 
 class SendChatRequest(BaseModel):
     text: str
+    reply_to: int | None = None
 
 
 # --- waiting-room dice game --------------------------------------------------

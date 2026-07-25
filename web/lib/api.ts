@@ -104,6 +104,24 @@ export interface ChatMessage {
   name: string;
   text: string;
   edited: boolean;
+  reply_to: number | null;
+  reply_name: string | null;
+  reply_text: string | null;
+}
+
+export interface AdminTable {
+  name: string;
+  rows: number;
+  columns: string[];
+}
+
+export interface AdminRows {
+  table: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface DiceEntry {
@@ -171,8 +189,11 @@ export const api = {
   adminStats: () => req<AdminStats>("GET", "/api/admin/stats"),
   adminUsers: (q?: string) =>
     req<AdminUser[]>("GET", `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
-  sendChat: (code: string, text: string) =>
-    req<ChatMessage[]>("POST", `/api/matches/${code}/chat`, { text }),
+  adminTables: () => req<AdminTable[]>("GET", "/api/admin/data/tables"),
+  adminRows: (table: string, limit = 25, offset = 0) =>
+    req<AdminRows>("GET", `/api/admin/data/rows/${table}?limit=${limit}&offset=${offset}`),
+  sendChat: (code: string, text: string, reply_to?: number | null) =>
+    req<ChatMessage[]>("POST", `/api/matches/${code}/chat`, { text, reply_to: reply_to ?? null }),
   editChat: (code: string, id: number, text: string) =>
     req<ChatMessage[]>("PATCH", `/api/matches/${code}/chat/${id}`, { text }),
   deleteChat: (code: string, id: number) =>

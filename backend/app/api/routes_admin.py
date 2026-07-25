@@ -5,16 +5,34 @@ rule still holds here: ``telegram_id`` never leaves the server, not even for an 
 """
 from __future__ import annotations
 
+from datetime import date, datetime
+from typing import Any
+
+import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import require_admin
-from app.database import get_session
+from app.database import Base, get_session
 from app.models import Match, MatchStatus, User
 from app.schemas import AdminStats, AdminUser
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+# --- data browser -----------------------------------------------------------
+# Browsable tables come straight from the ORM metadata (a whitelist — a client can
+# never name an arbitrary relation). Sensitive columns are redacted even for admins:
+# telegram_id NEVER leaves the server, per the project's hard privacy rule.
+_TABLES = Base.metadata.tables
+_REDACT = {"users": {"telegram_id"}}
+_DATA_MAX = 100
+
+
+def _serialise(v: Any) -> Any:
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    return v
 
 
 @router.get("/stats", response_model=AdminStats)
@@ -71,3 +89,52 @@ async def list_users(
     stmt = stmt.order_by(User.last_seen_at.desc().nullslast(), User.id.desc())
     rows = (await session.execute(stmt.limit(limit).offset(offset))).scalars().all()
     return [AdminUser.from_user(u) for u in rows]
+
+
+@router.get("/data/tables")
+async def data_tables(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Every browsable table with its row count and (redacted) column list."""
+    out = []
+    for name, tbl in sorted(_TABLES.items()):
+        count = (await session.execute(select(func.count()).select_from(tbl))).scalar_one()
+        cols = [c.name for c in tbl.columns if c.name not in _REDACT.get(name, set())]
+        out.append({"name": name, "rows": int(count or 0), "columns": cols})
+    return out
+
+
+@router.get("/data/rows/{table}")
+async def data_rows(
+    table: str,
+    limit: int = Query(default=25, le=_DATA_MAX),
+    offset: int = 0,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Rows of one whitelisted table, newest first, with sensitive columns redacted."""
+    tbl = _TABLES.get(table)
+    if tbl is None:
+        raise HTTPException(404, "Unknown table")
+    limit = max(1, min(limit, _DATA_MAX))
+    offset = max(0, offset)
+    redact = _REDACT.get(table, set())
+    cols = [c for c in tbl.columns if c.name not in redact]
+
+    total = (await session.execute(select(func.count()).select_from(tbl))).scalar_one()
+    stmt = select(*cols)
+    pk = list(tbl.primary_key.columns)
+    if len(pk) == 1:
+        stmt = stmt.order_by(pk[0].desc())   # newest first
+    stmt = stmt.limit(limit).offset(offset)
+    result = (await session.execute(stmt)).mappings().all()
+    data = [{k: _serialise(v) for k, v in row.items()} for row in result]
+    return {
+        "table": table,
+        "columns": [c.name for c in cols],
+        "rows": data,
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+    }

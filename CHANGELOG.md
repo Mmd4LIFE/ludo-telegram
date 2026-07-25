@@ -3,6 +3,10 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.4.1 — Replies & admin data
+- Reply to a message in chat — tap it and choose reply, alongside edit and delete.
+- Admins get a Data tab to browse the app's tables and their rows.
+
 ## 0.4.0 — Rules & housekeeping
 - A six now earns exactly one extra roll — roll a six twice in a row and the turn moves
   on (no more endless bonus).

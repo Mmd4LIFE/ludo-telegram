@@ -434,13 +434,23 @@ async def send_chat(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Join the room to chat")
     # (chat stays available while the game is playing, not just in the waiting room)
     msgs = _CHAT.setdefault(match.code, [])
-    msgs.append({
+    entry = {
         "id": (msgs[-1]["id"] + 1) if msgs else 1,
         "user_id": user.id,
         "name": user.first_name or "Player",
         "text": text,
         "edited": False,
-    })
+        "reply_to": None,
+        "reply_name": None,
+        "reply_text": None,
+    }
+    if body.reply_to is not None:
+        parent = next((m for m in msgs if m["id"] == body.reply_to), None)
+        if parent is not None:
+            entry["reply_to"] = parent["id"]
+            entry["reply_name"] = parent.get("name")
+            entry["reply_text"] = (parent.get("text") or "")[:80]
+    msgs.append(entry)
     del msgs[:-_CHAT_MAX]
     return [ChatMessage(**m) for m in msgs]
 

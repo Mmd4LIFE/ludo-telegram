@@ -27,11 +27,15 @@ import {
   Send,
   Pencil,
   Check,
+  Reply,
+  Database,
 } from "lucide-react";
 import {
   api,
   authenticate,
   AdminStats,
+  AdminTable,
+  AdminRows,
   AdminUser,
   ChatMessage,
   DiceState,
@@ -966,8 +970,9 @@ function MatchChat({
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [menuId, setMenuId] = useState<number | null>(null); // own message tapped
+  const [menuId, setMenuId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   useEffect(() => {
     let alive = true;
     const load = () => api.getChat(code).then((c) => alive && setChat(c)).catch(() => {});
@@ -988,7 +993,8 @@ function MatchChat({
         setChat(await api.editChat(code, editingId, t));
         setEditingId(null);
       } else {
-        setChat(await api.sendChat(code, t));
+        setChat(await api.sendChat(code, t, replyTo?.id ?? null));
+        setReplyTo(null);
       }
       setDraft("");
     } catch {
@@ -1001,10 +1007,6 @@ function MatchChat({
     setMenuId(null);
     try {
       setChat(await api.deleteChat(code, id));
-      if (editingId === id) {
-        setEditingId(null);
-        setDraft("");
-      }
     } catch {
       /* ignore */
     }
@@ -1024,6 +1026,7 @@ function MatchChat({
       >
         {[...chat].reverse().map((m) => {
           const mine = m.user_id === profile.id;
+          const open = menuId === m.id;
           return (
             <div key={m.id} className={cn("flex", mine ? "justify-end pl-8" : "justify-start pr-8")}>
               <div
@@ -1031,8 +1034,8 @@ function MatchChat({
                   "flex max-w-[88%] items-start gap-2",
                   mine && "flex-row-reverse text-right"
                 )}
-                onClick={mine ? () => setMenuId(menuId === m.id ? null : m.id) : undefined}
-                style={{ cursor: mine ? "pointer" : "default" }}
+                onClick={() => setMenuId(open ? null : m.id)}
+                style={{ cursor: "pointer" }}
               >
                 <span
                   className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white ring-1 ring-white/20"
@@ -1041,6 +1044,19 @@ function MatchChat({
                   {(m.name || "P").slice(0, 1).toUpperCase()}
                 </span>
                 <div className="min-w-0 leading-snug" style={{ textShadow: shadow }}>
+                  {/* quoted reply */}
+                  {m.reply_to != null && m.reply_text != null && (
+                    <div
+                      className={cn(
+                        "mb-0.5 rounded-md border-l-2 bg-white/10 px-1.5 py-0.5 text-[11px] text-white/70",
+                        mine ? "border-white/40" : ""
+                      )}
+                      style={mine ? undefined : { borderColor: tint(m.user_id) }}
+                    >
+                      <span className="font-bold">{m.reply_name}</span>{" "}
+                      <span className="opacity-80">{m.reply_text}</span>
+                    </div>
+                  )}
                   {!mine && (
                     <>
                       <span className="text-[13px] font-bold" style={{ color: tint(m.user_id) }}>
@@ -1050,31 +1066,47 @@ function MatchChat({
                   )}
                   <span className="text-[13px] text-white break-words">{m.text}</span>
                   {m.edited && <span className="text-[10px] text-white/50"> (edited)</span>}
-                  {/* your own message: tap to edit / delete */}
-                  {mine && menuId === m.id && (
+                  {open && (
                     <span className="ml-2 inline-flex items-center gap-1 align-middle">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setEditingId(m.id);
-                          setDraft(m.text);
+                          setReplyTo(m);
+                          setEditingId(null);
                           setMenuId(null);
                         }}
                         className="grid size-6 place-items-center rounded-full bg-white/15 text-white active:scale-90"
-                        aria-label="Edit"
+                        aria-label="Reply"
                       >
-                        <Pencil className="size-3" />
+                        <Reply className="size-3" />
                       </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          del(m.id);
-                        }}
-                        className="grid size-6 place-items-center rounded-full bg-red/80 text-white active:scale-90"
-                        aria-label="Delete"
-                      >
-                        <Trash2 className="size-3" />
-                      </button>
+                      {mine && (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingId(m.id);
+                              setReplyTo(null);
+                              setDraft(m.text);
+                              setMenuId(null);
+                            }}
+                            className="grid size-6 place-items-center rounded-full bg-white/15 text-white active:scale-90"
+                            aria-label="Edit"
+                          >
+                            <Pencil className="size-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              del(m.id);
+                            }}
+                            className="grid size-6 place-items-center rounded-full bg-red/80 text-white active:scale-90"
+                            aria-label="Delete"
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        </>
+                      )}
                     </span>
                   )}
                 </div>
@@ -1087,15 +1119,25 @@ function MatchChat({
         )}
       </div>
 
-      {editingId != null && (
-        <div className="mb-1 flex items-center justify-between px-2 text-[11px] text-muted-foreground">
-          <span>Editing your message…</span>
+      {(replyTo || editingId != null) && (
+        <div className="mb-1 flex items-center justify-between gap-2 rounded-lg bg-white/8 px-2.5 py-1.5 text-[11px]">
+          <div className="min-w-0 flex-1 truncate text-muted-foreground">
+            {editingId != null ? (
+              <span>Editing your message…</span>
+            ) : (
+              <span>
+                Replying to <span className="font-bold text-foreground">{replyTo?.name}</span>:{" "}
+                {replyTo?.text}
+              </span>
+            )}
+          </div>
           <button
             onClick={() => {
               setEditingId(null);
+              setReplyTo(null);
               setDraft("");
             }}
-            className="font-bold text-primary"
+            className="shrink-0 font-bold text-primary"
           >
             Cancel
           </button>
@@ -1107,7 +1149,7 @@ function MatchChat({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder={editingId != null ? "Edit message…" : "Message…"}
+          placeholder={editingId != null ? "Edit message…" : replyTo ? "Reply…" : "Message…"}
           maxLength={200}
           className="h-8 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
@@ -1367,6 +1409,7 @@ function LiveMatch({
 /* ---------------------------------------------------------------- admin */
 
 function AdminPanel({ onBack }: { onBack: () => void }) {
+  const [tab, setTab] = useState<"overview" | "data">("overview");
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [q, setQ] = useState("");
@@ -1420,6 +1463,25 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
         <div className="rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">{err}</div>
       )}
 
+      <div className="flex gap-2">
+        {(["overview", "data"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={cn(
+              "flex-1 rounded-xl py-2 text-xs font-bold uppercase tracking-wider transition",
+              tab === t ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground"
+            )}
+          >
+            {t === "overview" ? "Overview" : "Data"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "data" && <DataBrowser />}
+
+      {tab === "overview" && (
+      <>
       <Card>
         <SectionLabel>Overview</SectionLabel>
         <div className="mt-2.5 grid grid-cols-2 gap-2">
@@ -1481,7 +1543,129 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
           ))}
         </div>
       </Card>
+      </>
+      )}
     </Shell>
+  );
+}
+
+function DataBrowser() {
+  const [tables, setTables] = useState<AdminTable[]>([]);
+  const [active, setActive] = useState<string | null>(null);
+  const [data, setData] = useState<AdminRows | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.adminTables().then(setTables).catch((e) => setErr(String(e)));
+  }, []);
+
+  const load = (table: string, offset: number) => {
+    setLoading(true);
+    setErr(null);
+    api
+      .adminRows(table, 25, offset)
+      .then(setData)
+      .catch((e) => setErr(String(e)))
+      .finally(() => setLoading(false));
+  };
+  const open = (table: string) => {
+    setActive(table);
+    load(table, 0);
+  };
+
+  const cell = (v: unknown) => {
+    if (v === null || v === undefined) return "—";
+    if (typeof v === "boolean") return v ? "true" : "false";
+    if (typeof v === "object") return JSON.stringify(v);
+    return String(v);
+  };
+
+  return (
+    <>
+      {err && <div className="rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">{err}</div>}
+
+      <Card>
+        <SectionLabel>Tables</SectionLabel>
+        <div className="mt-2.5 flex flex-col gap-1.5">
+          {tables.map((t) => (
+            <button
+              key={t.name}
+              onClick={() => open(t.name)}
+              className={cn(
+                "flex items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition active:scale-[0.98]",
+                active === t.name ? "bg-primary/15 ring-1 ring-primary/40" : "bg-secondary/60"
+              )}
+            >
+              <span className="inline-flex items-center gap-2 font-semibold">
+                <Database className="size-4 text-muted-foreground" />
+                {t.name}
+              </span>
+              <span className="text-xs tabular-nums text-muted-foreground">{t.rows.toLocaleString()} rows</span>
+            </button>
+          ))}
+          {tables.length === 0 && <div className="text-xs text-muted-foreground">Loading…</div>}
+        </div>
+      </Card>
+
+      {active && data && (
+        <Card className="p-2">
+          <div className="flex items-center justify-between px-1 pb-2">
+            <SectionLabel>{data.table}</SectionLabel>
+            <span className="text-[10px] text-muted-foreground">
+              {data.offset + 1}–{Math.min(data.offset + data.rows.length, data.total)} of{" "}
+              {data.total.toLocaleString()}
+            </span>
+          </div>
+          <div className="no-scrollbar overflow-x-auto">
+            <table className="w-full border-collapse text-[11px]">
+              <thead>
+                <tr>
+                  {data.columns.map((c) => (
+                    <th
+                      key={c}
+                      className="whitespace-nowrap border-b border-white/10 px-2 py-1.5 text-left font-bold text-muted-foreground"
+                    >
+                      {c}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row, i) => (
+                  <tr key={i} className="border-b border-white/5">
+                    {data.columns.map((c) => (
+                      <td key={c} className="max-w-[180px] truncate whitespace-nowrap px-2 py-1.5 tabular-nums">
+                        {cell(row[c])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-2 flex items-center justify-between px-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={loading || data.offset === 0}
+              onClick={() => load(data.table, Math.max(0, data.offset - data.limit))}
+            >
+              Prev
+            </Button>
+            <span className="text-[10px] text-muted-foreground">{loading ? "loading…" : ""}</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={loading || data.offset + data.limit >= data.total}
+              onClick={() => load(data.table, data.offset + data.limit)}
+            >
+              Next
+            </Button>
+          </div>
+        </Card>
+      )}
+    </>
   );
 }
 
