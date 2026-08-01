@@ -3,6 +3,14 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.5.1 — Every card comes alive
+- All 17 fantasy cards now actually do something: shields, double dice, freezes, warps,
+  swaps, recalls, extra turns, a coin jackpot and more.
+- The board shows your active powers — a shield ring on protected pieces and SHIELD / 2× /
+  FROZEN chips by each player.
+- Targets are picked for you for now (the leading rival, your lead piece); choosing your
+  own target is coming later.
+
 ## 0.5.0 — Fantasy cards
 - Bring a token home and you no longer just get another roll — you draw a **fantasy card**.
   Four cards appear face-down; pick one, watch them all flip, and claim your prize.

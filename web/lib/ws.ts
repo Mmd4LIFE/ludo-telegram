@@ -17,6 +17,15 @@ export interface GameState {
   turn: number;
   ranking: number[];
   active_stars: number[]; // colour values whose neutral stars are live/safe
+  roll_face?: number | null;
+  // fantasy-card buffs, each keyed by seat string
+  effects?: {
+    shield?: Record<string, number>;
+    double?: Record<string, number>;
+    skip?: Record<string, number>;
+    second_chance?: Record<string, number>;
+    toll?: Record<string, number>;
+  };
 }
 
 // an in-progress fantasy-card draw (reach-home reward)

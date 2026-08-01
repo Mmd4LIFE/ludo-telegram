@@ -162,6 +162,12 @@ export default function Board({
 }) {
   const removed = new Set(removedSeats);
   const activeStars = new Set((state.active_stars ?? []).map((v) => COLOR_BY_VALUE[v]));
+  const eff = state.effects ?? {};
+  const seatsWith = (m?: Record<string, number>) =>
+    new Set(Object.entries(m ?? {}).filter(([, v]) => v > 0).map(([s]) => Number(s)));
+  const shielded = seatsWith(eff.shield);
+  const frozen = seatsWith(eff.skip);
+  const doubled = seatsWith(eff.double);
   const movable = new Set(legal.map((m) => m.token_index));
   const myTurn = mySeat !== null && state.current === mySeat && state.phase === "move";
   const moverColor = state.players[state.current]?.color ?? "RED";
@@ -379,6 +385,11 @@ export default function Board({
               }}
             >
               <circle cx={0} cy={0} r={r + 1.5} fill="#00000022" />
+              {shielded.has(t.seat) && (
+                <circle cx={0} cy={0} r={r + 3} fill="none" stroke="#38bdf8" strokeWidth={2} strokeDasharray="3 2" opacity={0.9}>
+                  <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="6s" repeatCount="indefinite" />
+                </circle>
+              )}
               <circle cx={0} cy={0} r={r} fill={COLORS[t.color]} stroke={t.canMove ? "#111827" : "#ffffff"} strokeWidth={t.canMove ? 2.5 : 2} />
               <circle cx={0} cy={-r * 0.28} r={r * 0.32} fill="#ffffff" opacity={0.6} />
               {t.canMove && (
@@ -480,6 +491,33 @@ export default function Board({
                   {level}
                 </text>
               </g>
+              )}
+
+              {/* active fantasy-card buffs, shown as small chips below the name */}
+              {!gone && (shielded.has(seat) || frozen.has(seat) || doubled.has(seat)) && (
+                (() => {
+                  const chips: { t: string; c: string }[] = [];
+                  if (shielded.has(seat)) chips.push({ t: "SHIELD", c: "#38bdf8" });
+                  if (doubled.has(seat)) chips.push({ t: "2×", c: "#e5c07b" });
+                  if (frozen.has(seat)) chips.push({ t: "FROZEN", c: "#93c5fd" });
+                  const [bx, by] = un(0, r + CELL * 0.92);
+                  return (
+                    <g transform={`rotate(${-rot} ${cx + bx} ${cy + by})`}>
+                      <text
+                        x={cx + bx}
+                        y={cy + by}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fontSize={CELL * 0.26}
+                        fontWeight={800}
+                        letterSpacing="0.5"
+                        fill={chips.map((c) => c.c)[0]}
+                      >
+                        {chips.map((c) => c.t).join(" · ")}
+                      </text>
+                    </g>
+                  );
+                })()
               )}
             </g>
           );

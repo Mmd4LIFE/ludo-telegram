@@ -19,6 +19,19 @@ class Phase(str, Enum):
     FINISHED = "finished"  # game over; see GameState.ranking
 
 
+# Fantasy-card buffs, each a {seat: int} map (see docs/prd/fantasy-cards.md):
+#   shield        seat -> rounds its tokens can't be captured
+#   double        seat -> number of upcoming rolls whose movement is doubled
+#   skip          seat -> upcoming turns to skip (frozen)
+#   second_chance seat -> 1 while a one-shot "don't get knocked home" is armed
+#   toll          seat -> rounds its neutral star blocks rivals from landing on it
+_EFFECT_KEYS = ("shield", "double", "skip", "second_chance", "toll")
+
+
+def _default_effects() -> dict[str, dict[int, int]]:
+    return {k: {} for k in _EFFECT_KEYS}
+
+
 @dataclass
 class PlayerState:
     color: Color
@@ -76,6 +89,12 @@ class GameState:
     # colour VALUES (0..3) whose neutral stars are active (safe) — set by the
     # "Active Stars" fantasy card. Empty by default: neutral stars protect no one.
     active_stars: list[int] = field(default_factory=list)
+    # the actual die FACE last rolled (1..6). ``die`` is the effective MOVEMENT value,
+    # which the Twin Dice card can double — so release-from-base / six logic keys off
+    # roll_face while distance keys off die.
+    roll_face: int | None = None
+    # fantasy-card buffs (see _default_effects)
+    effects: dict[str, dict[int, int]] = field(default_factory=_default_effects)
 
     # ---- convenience ------------------------------------------------------
     @property
@@ -89,6 +108,20 @@ class GameState:
     def clone(self) -> "GameState":
         return copy.deepcopy(self)
 
+    # ---- effect helpers ---------------------------------------------------
+    def eff(self, key: str, seat: int) -> int:
+        return self.effects.get(key, {}).get(seat, 0)
+
+    def set_eff(self, key: str, seat: int, value: int) -> None:
+        d = self.effects.setdefault(key, {})
+        if value > 0:
+            d[seat] = value
+        else:
+            d.pop(seat, None)
+
+    def add_eff(self, key: str, seat: int, delta: int) -> None:
+        self.set_eff(key, seat, self.eff(key, seat) + delta)
+
     def to_dict(self) -> dict:
         return {
             "players": [p.to_dict() for p in self.players],
@@ -99,6 +132,12 @@ class GameState:
             "turn": self.turn,
             "ranking": list(self.ranking),
             "active_stars": list(self.active_stars),
+            "roll_face": self.roll_face,
+            # JSON object keys must be strings — seats are re-parsed to int in from_dict
+            "effects": {
+                key: {str(s): v for s, v in seats.items()}
+                for key, seats in self.effects.items()
+            },
         }
 
     @classmethod
@@ -120,4 +159,9 @@ class GameState:
             turn=d.get("turn", 0),
             ranking=list(d.get("ranking", [])),
             active_stars=list(d.get("active_stars", [])),
+            roll_face=d.get("roll_face"),
+            effects={
+                key: {int(s): int(v) for s, v in (d.get("effects", {}).get(key) or {}).items()}
+                for key in _EFFECT_KEYS
+            },
         )

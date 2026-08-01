@@ -139,6 +139,66 @@ def test_neutral_star_safe_only_when_activated() -> None:
     _check("owner safe on its neutral star once activated", moves and moves[0].captures == ())
 
 
+# --- fantasy-card buffs -----------------------------------------------------
+def _red_hits_yellow_at5() -> GameState:
+    """RED at abs 2 rolls a 3 to land on abs 5, where YELLOW sits (a non-safe cell)."""
+    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+    s.players[1].tokens[0] = 31   # YELLOW abs 5  ((26+31)%52)
+    s.players[0].tokens[0] = 2    # RED abs 2
+    register_roll(s, 3)
+    return s
+
+
+def test_shield_blocks_capture() -> None:
+    s = _red_hits_yellow_at5()
+    s.set_eff("shield", 1, 2)              # YELLOW (seat 1) shielded
+    moves = [m for m in legal_moves(s) if m.token_index == 0]
+    _check("shielded token is not capturable", moves and moves[0].captures == ())
+
+
+def test_second_chance_negates_and_consumes() -> None:
+    s = _red_hits_yellow_at5()
+    s.set_eff("second_chance", 1, 1)
+    moves = [m for m in legal_moves(s) if m.token_index == 0]
+    _check("capture is geometrically present", moves and moves[0].captures == ((1, 0),))
+    res = apply_move(s, moves[0])
+    _check("victim saved (not sent to base)", s.players[1].tokens[0] == 31)
+    _check("no real capture recorded", res.captured == [])
+    _check("second chance consumed", s.eff("second_chance", 1) == 0)
+    _check("a saved knock grants no extra turn", not res.extra_turn)
+
+
+def test_freeze_skips_a_turn() -> None:
+    s = initial_state(3, seat_colors=[Color.RED, Color.GREEN, Color.YELLOW])
+    s.set_eff("skip", 1, 1)               # GREEN (seat 1) frozen for one turn
+    register_roll(s, 3)                   # RED, all in base -> no move -> pass
+    apply_move(s, None)
+    _check("frozen seat is skipped", s.current == 2)
+    _check("one frozen turn consumed", s.eff("skip", 1) == 0)
+
+
+def test_toll_blocks_landing() -> None:
+    # YELLOW's neutral star is abs 34; RED at prog 31 rolling 3 would land there.
+    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+    s.players[0].tokens[0] = 31           # RED abs 31 -> +3 = abs 34 (yellow's star)
+    s.set_eff("toll", 1, 1)               # YELLOW tolls its star
+    register_roll(s, 3)
+    moves = [m for m in legal_moves(s) if m.token_index == 0]
+    _check("a rival cannot land on an active toll star", moves == [])
+
+
+def test_double_movement_keeps_release_on_face() -> None:
+    # Twin Dice doubles the movement value but release still needs the FACE to be 6.
+    s = initial_state(2)
+    register_roll(s, 3)                   # face 3
+    s.die = 6                             # simulate doubled movement (3*2)
+    _check("roll_face stays 3", s.roll_face == 3)
+    _check("cannot release on a doubled 6 (face was 3)", legal_moves(s) == [])
+    s2 = initial_state(2)
+    register_roll(s2, 6)                  # face 6
+    _check("can release on a real six", any(m.releases_from_base for m in legal_moves(s2)))
+
+
 def test_six_with_no_move_keeps_the_turn() -> None:
     """A six you cannot play still earns another roll (the reward for the six)."""
     s = initial_state(4)
@@ -221,6 +281,11 @@ def run_all() -> None:
         test_capture_sends_home_and_grants_turn,
         test_start_square_protects_owner_only,
         test_neutral_star_safe_only_when_activated,
+        test_shield_blocks_capture,
+        test_second_chance_negates_and_consumes,
+        test_freeze_skips_a_turn,
+        test_toll_blocks_landing,
+        test_double_movement_keeps_release_on_face,
         test_six_with_no_move_keeps_the_turn,
         test_must_land_home_exactly,
         test_fuzz_games,

@@ -41,8 +41,9 @@ from app.ludo import (
     register_roll,
     roll_die,
 )
-from app.ludo.board import HOME, TOKENS_PER_PLAYER, Color
+from app.ludo.board import BASE, HOME, TOKENS_PER_PLAYER, Color
 from app.ludo.bots import choose_move
+from app.ludo.rules import _captures_at
 from app.game.connection import hub
 from app.models import Match, MatchStatus, DiceRoll, Knockout, Card, CardDraw
 from sqlalchemy import insert, select
@@ -109,6 +110,9 @@ class MatchRuntime:
         self.buf_cards: list[dict] = []
         # the in-progress fantasy-card draw, surfaced to the client (None when idle)
         self._card: dict | None = None
+        # (seat, effect) of each card played this game — for Mirror (copy an opponent's)
+        self._recent_cards: list[tuple[int, str]] = []
+        self.stat_coins: dict[int, int] = {}   # uid -> bonus coins to grant (Jackpot)
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -211,17 +215,22 @@ class MatchRuntime:
             else:
                 await self._think()
             register_roll(self.state, roll_die(self._rng))
-            if self.state.die is not None:
-                self.seat_last_die[seat] = self.state.die
+            # Twin Dice: double the MOVEMENT of this roll (face/six logic keep the real face)
+            if self.state.eff("double", seat) > 0 and self.state.roll_face is not None:
+                self.state.die = self.state.roll_face * 2
+                self.state.add_eff("double", seat, -1)
+            if self.state.roll_face is not None:
+                face = self.state.roll_face
+                self.seat_last_die[seat] = face          # show the true face, not the doubled value
                 ghist = self.game_dice.setdefault(seat, {})
-                ghist[self.state.die] = ghist.get(self.state.die, 0) + 1
+                ghist[face] = ghist.get(face, 0) + 1
                 uid = self._human_uid(seat)
                 if uid is not None:
                     hist = self.stat_dice.setdefault(uid, {})
-                    hist[self.state.die] = hist.get(self.state.die, 0) + 1
+                    hist[face] = hist.get(face, 0) + 1
                     self.buf_rolls.append({
                         "match_id": self.match_id, "user_id": uid, "seat": seat,
-                        "value": self.state.die, "turn": self.state.turn,
+                        "value": face, "turn": self.state.turn,
                     })
             await self._broadcast()
             await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)  # hold on the die face
@@ -335,24 +344,163 @@ class MatchRuntime:
         self._card = None
         await self._broadcast()
 
+    # ---- fantasy-card effects --------------------------------------------
     def _apply_card(self, seat: int, effect: str) -> None:
-        """Apply a drawn card's effect. Only the 'live' effects change play today; the rest
-        are drawable but inert (see docs/prd/fantasy-cards.md for the roadmap)."""
-        if effect == "active_stars":
-            c = self.state.players[seat].color.value
-            if c not in self.state.active_stars:
-                self.state.active_stars.append(c)
-        elif effect == "extra_roll":
-            # hand the turn back to the drawer for one more roll
-            if (
-                self.state.phase is not Phase.FINISHED
-                and not self.state.players[seat].all_home()
-            ):
-                self.state.current = seat
-                self.state.phase = Phase.ROLL
-                self.state.die = None
-                self.state.consecutive_sixes = 0
-        # every other effect is not wired into gameplay yet (roadmap)
+        """Apply a drawn card's effect, auto-selecting sensible targets. Every effect is
+        wired (see docs/prd/fantasy-cards.md); Mirror re-applies an opponent's last card."""
+        if effect != "mirror":
+            self._recent_cards.append((seat, effect))
+        st = self.state
+
+        if effect == "extra_roll":
+            self._grant_turn(seat)
+        elif effect == "active_stars":
+            c = st.players[seat].color.value
+            if c not in st.active_stars:
+                st.active_stars.append(c)
+        elif effect == "shield":
+            st.set_eff("shield", seat, 3)                 # your tokens uncapturable, 3 rounds
+        elif effect == "shield_all":
+            st.set_eff("shield", seat, 5)                 # a longer sanctuary
+        elif effect == "double_dice":
+            st.set_eff("double", seat, 2)                 # next 2 rolls doubled
+        elif effect == "second_chance":
+            st.set_eff("second_chance", seat, 1)
+        elif effect == "toll":
+            st.set_eff("toll", seat, 2)                   # your star blocks rivals ~1 round
+        elif effect == "lock":
+            self._freeze_leading_rival(seat, 1)
+        elif effect == "lock2":
+            self._freeze_leading_rival(seat, 2)
+        elif effect == "steal_turn":
+            self._grant_turn(seat)                        # jump the queue: take a turn now
+        elif effect == "boost":
+            self._advance_own_token(seat, 3)
+        elif effect == "summon":
+            self._release_from_base(seat)
+        elif effect == "teleport":
+            self._warp_to_next_star(seat)
+        elif effect == "recall":
+            self._recall_leading_rival(seat, 4)
+        elif effect == "swap":
+            self._swap_with_leading_rival(seat)
+        elif effect == "coins":
+            uid = self._human_uid(seat)
+            if uid is not None:
+                self.stat_coins[uid] = self.stat_coins.get(uid, 0) + 150
+        elif effect == "mirror":
+            mirrored = next(
+                (eff for s, eff in reversed(self._recent_cards) if s != seat), None
+            )
+            if mirrored:
+                self._apply_card(seat, mirrored)
+
+    def _grant_turn(self, seat: int) -> None:
+        st = self.state
+        if st.phase is not Phase.FINISHED and not st.players[seat].all_home():
+            st.current = seat
+            st.phase = Phase.ROLL
+            st.die = None
+            st.roll_face = None
+            st.consecutive_sixes = 0
+
+    def _ring_tokens(self, seat: int) -> list[int]:
+        """Token indices of a seat that are on the shared ring (0..50), lead first."""
+        toks = [(i, p) for i, p in enumerate(self.state.players[seat].tokens) if 0 <= p <= 50]
+        toks.sort(key=lambda t: t[1], reverse=True)
+        return [i for i, _ in toks]
+
+    def _leading_rival(self, seat: int) -> int | None:
+        """The active opponent with the most total progress (their tokens summed)."""
+        best, best_score = None, -1
+        for s, p in enumerate(self.state.players):
+            if s == seat or p.all_home():
+                continue
+            score = sum(t for t in p.tokens if t >= 0)
+            if score > best_score:
+                best, best_score = s, score
+        return best
+
+    def _capture_at(self, seat: int, prog: int) -> None:
+        """Send any capturable opponents sharing ``seat``'s token square back to base
+        (respects shields / safe squares via the engine's capture rule)."""
+        color = self.state.players[seat].color
+        for vseat, vtok in _captures_at(self.state, color, prog):
+            if self.state.eff("second_chance", vseat) > 0:
+                self.state.set_eff("second_chance", vseat, 0)
+                continue
+            self.state.players[vseat].tokens[vtok] = BASE
+            self.game_dealt[seat] = self.game_dealt.get(seat, 0) + 1
+            mover = self._human_uid(seat)
+            if mover is not None:
+                self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + 1
+            self.game_taken[vseat] = self.game_taken.get(vseat, 0) + 1
+            vuid = self._human_uid(vseat)
+            if vuid is not None:
+                self.stat_taken[vuid] = self.stat_taken.get(vuid, 0) + 1
+
+    def _advance_own_token(self, seat: int, steps: int) -> None:
+        for i in self._ring_tokens(seat):
+            dst = self.state.players[seat].tokens[i] + steps
+            if dst <= HOME:
+                self.state.players[seat].tokens[i] = dst
+                if dst <= 50:
+                    self._capture_at(seat, dst)
+                return
+
+    def _release_from_base(self, seat: int) -> None:
+        for i, p in enumerate(self.state.players[seat].tokens):
+            if p == BASE:
+                self.state.players[seat].tokens[i] = 0
+                self._capture_at(seat, 0)
+                return
+
+    def _warp_to_next_star(self, seat: int) -> None:
+        # jump the lead ring token forward to the next star square (own start/neutral) ahead
+        from app.ludo.board import START_OFFSET, NEUTRAL_STARS
+        color = self.state.players[seat].color
+        star_progs = sorted(
+            {(sq - START_OFFSET[color]) % 52 for sq in list(START_OFFSET.values()) + list(NEUTRAL_STARS)}
+        )
+        for i in self._ring_tokens(seat):
+            prog = self.state.players[seat].tokens[i]
+            ahead = next((sp for sp in star_progs if 0 < sp <= 50 and sp > prog), None)
+            if ahead is not None:
+                self.state.players[seat].tokens[i] = ahead
+                self._capture_at(seat, ahead)
+                return
+
+    def _recall_leading_rival(self, seat: int, steps: int) -> None:
+        rival = self._leading_rival(seat)
+        if rival is None:
+            return
+        for i in self._ring_tokens(rival):
+            self.state.players[rival].tokens[i] = max(0, self.state.players[rival].tokens[i] - steps)
+            return
+
+    def _swap_with_leading_rival(self, seat: int) -> None:
+        from app.ludo.board import START_OFFSET
+        rival = self._leading_rival(seat)
+        if rival is None:
+            return
+        mine = self._ring_tokens(seat)
+        theirs = self._ring_tokens(rival)
+        if not mine or not theirs:
+            return
+        mi, ti = mine[0], theirs[0]
+        my_color, rv_color = self.state.players[seat].color, self.state.players[rival].color
+        my_abs = (START_OFFSET[my_color] + self.state.players[seat].tokens[mi]) % 52
+        rv_abs = (START_OFFSET[rv_color] + self.state.players[rival].tokens[ti]) % 52
+        new_mine = (rv_abs - START_OFFSET[my_color]) % 52
+        new_rival = (my_abs - START_OFFSET[rv_color]) % 52
+        if 0 <= new_mine <= 50 and 0 <= new_rival <= 50:
+            self.state.players[seat].tokens[mi] = new_mine
+            self.state.players[rival].tokens[ti] = new_rival
+
+    def _freeze_leading_rival(self, seat: int, turns: int) -> None:
+        rival = self._leading_rival(seat)
+        if rival is not None:
+            self.state.add_eff("skip", rival, turns)
 
     async def _think(self) -> None:
         await asyncio.sleep(self._rng.uniform(settings.BOT_THINK_MIN, settings.BOT_THINK_MAX))
@@ -452,8 +600,8 @@ class MatchRuntime:
         SQLAlchemy detects the change (in-place JSONB mutation isn't tracked).
         """
         uids = (
-            set(self.stat_dice) | set(self.stat_dealt)
-            | set(self.stat_taken) | set(self.stat_potential)
+            set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
+            | set(self.stat_potential) | set(self.stat_coins)
         )
         if not uids:
             return
@@ -471,6 +619,8 @@ class MatchRuntime:
             user.captures_dealt = (user.captures_dealt or 0) + self.stat_dealt.get(uid, 0)
             user.captures_taken = (user.captures_taken or 0) + self.stat_taken.get(uid, 0)
             user.potential_knocks = (user.potential_knocks or 0) + self.stat_potential.get(uid, 0)
+            if self.stat_coins.get(uid):
+                user.coins = (user.coins or 0) + self.stat_coins[uid]
 
         # deltas are now persisted (within this session's pending commit) — reset them so
         # the next flush only applies what's new.
@@ -478,6 +628,7 @@ class MatchRuntime:
         self.stat_dealt = {}
         self.stat_taken = {}
         self.stat_potential = {}
+        self.stat_coins = {}
 
     async def _settle(self) -> None:
         """Write final placements, pay the pot to the winner, bump stats."""

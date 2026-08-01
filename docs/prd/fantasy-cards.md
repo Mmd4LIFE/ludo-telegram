@@ -1,6 +1,11 @@
 # PRD — Fantasy Cards (reach-home reward overhaul)
 
-Status: **Phase 1 shipped** · Owner: game team · Last updated: 2026-08-01
+Status: **All 17 cards live** (Phases 1–4 shipped) · Owner: game team · Last updated: 2026-08-01
+
+> **Update:** every card's effect is now wired into gameplay. Targeting is **automatic**
+> (e.g. "the leading rival", "your lead token") rather than a manual picker — a manual
+> target-selection UI is the remaining refinement (see §7). Buff durations are tracked on
+> `GameState.effects` and tick down at the start of the owner's turn.
 
 ## 1. Summary
 
@@ -81,16 +86,19 @@ its owner colour. Now:
 
 ## 6. Phased rollout
 
-- **Phase 1 (shipped):** chance-box draw flow (pick → flip → apply), DB-backed catalog,
-  draw logging, stars rework, and two live effects — *Encore* and *Starfall*. All other
-  cards are drawable and shown but inert.
-- **Phase 2:** self-targeting effects with no target picker — *Sprint*, *Rally*, *Twin
-  Dice*, *Aegis/Bulwark*, *Second Wind*. Needs a per-player "active effects/buffs" store on
-  the game state and hooks in roll/capture/turn logic.
-- **Phase 3:** opponent-targeting effects that need a target picker UI — *Freeze/Deep
-  Freeze*, *Recall*, *Warp*, *Switcheroo*, *Toll Gate*, *Usurp*, *Mirror*.
-- **Phase 4:** economy + polish — *Jackpot* coins, rarity-weighted odds, admin card editor,
-  per-player draw history in profile, sound/animation pass.
+- **Phase 1 (shipped):** chance-box draw flow, DB-backed catalog, draw logging, stars
+  rework, *Encore* + *Starfall*.
+- **Phase 2 (shipped):** self buffs via `GameState.effects` + engine hooks — *Sprint*,
+  *Rally*, *Twin Dice* (movement doubled, keyed off `roll_face`), *Aegis/Bulwark*
+  (shield in `_captures_at`), *Second Wind* (negate + consume in `apply_move`).
+- **Phase 3 (shipped, auto-targeted):** *Freeze/Deep Freeze* (skip in the turn walker),
+  *Recall*, *Warp*, *Switcheroo*, *Usurp*, *Toll Gate* (block in `legal_moves`), *Mirror*
+  (replays the last opponent card). Targets are chosen automatically (leading rival / lead
+  token) — no picker yet.
+- **Phase 4 (shipped):** *Jackpot* awards coins (flushed with the stat write). Board shows
+  shield/frozen/2× buff chips + a shield ring on protected tokens.
+- **Remaining:** manual target selection UI, rarity-weighted draw odds, admin card editor,
+  per-player draw history in profile, and a fuller animation/sound pass.
 
 ## 7. Open questions
 
