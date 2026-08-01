@@ -114,6 +114,42 @@ export interface ChatMessage {
 // Keep in step with ALLOWED_REACTIONS on the backend.
 export const REACTIONS = ["👍", "❤️", "😂", "🔥"] as const;
 
+export interface AdminReaction {
+  id: number;
+  emoji: string;
+  position: number;
+}
+
+export interface AdminChatSeat {
+  seat_index: number;
+  color: string;
+  name: string;
+  user_id: number | null;
+  is_bot: boolean;
+}
+
+export interface AdminChatEntry {
+  id: number;
+  user_id: number;
+  name: string;
+  text: string;
+  edited: boolean;
+  deleted: boolean;
+  created_at: string | null;
+  reply_name: string | null;
+  reply_text: string | null;
+  reactions: Record<string, number>;
+}
+
+export interface AdminChatView {
+  id: number;
+  code: string;
+  status: string;
+  created_at: string | null;
+  seats: AdminChatSeat[];
+  messages: AdminChatEntry[];
+}
+
 export interface AdminTable {
   name: string;
   rows: number;
@@ -206,9 +242,17 @@ export const api = {
   getChat: (code: string) => req<ChatMessage[]>("GET", `/api/matches/${code}/chat`),
   scoreboard: (limit = 50) => req<PlayerStats[]>("GET", `/api/scoreboard?limit=${limit}`),
   userProfile: (id: number) => req<PlayerStats>("GET", `/api/users/${id}/profile`),
+  getReactions: () => req<string[]>("GET", "/api/reactions"),
   adminStats: () => req<AdminStats>("GET", "/api/admin/stats"),
   adminUsers: (q?: string) =>
     req<AdminUser[]>("GET", `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  adminReactions: () => req<AdminReaction[]>("GET", "/api/admin/reactions"),
+  adminAddReaction: (emoji: string) =>
+    req<AdminReaction[]>("POST", "/api/admin/reactions", { emoji }),
+  adminRemoveReaction: (id: number) =>
+    req<AdminReaction[]>("DELETE", `/api/admin/reactions/${id}`),
+  adminMatchChat: (ref: string) =>
+    req<AdminChatView>("GET", `/api/admin/matches/${encodeURIComponent(ref)}/chat`),
   adminTables: () => req<AdminTable[]>("GET", "/api/admin/data/tables"),
   adminRows: (table: string, limit = 25, offset = 0) =>
     req<AdminRows>("GET", `/api/admin/data/rows/${table}?limit=${limit}&offset=${offset}`),

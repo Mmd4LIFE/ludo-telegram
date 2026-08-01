@@ -12,10 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_session
-from app.models import User
+from app.models import User, ReactionEmoji
 from app.schemas import PlayerStats
 
 router = APIRouter(prefix="/api", tags=["stats"])
+
+
+@router.get("/reactions", response_model=list[str])
+async def reactions(
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """The current set of chat reaction emojis (admin-managed), ordered for display."""
+    rows = (
+        await session.execute(
+            select(ReactionEmoji.emoji).order_by(ReactionEmoji.position, ReactionEmoji.id)
+        )
+    ).scalars().all()
+    return list(rows)
 
 
 @router.get("/scoreboard", response_model=list[PlayerStats])

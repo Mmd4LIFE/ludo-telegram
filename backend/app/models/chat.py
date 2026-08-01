@@ -43,6 +43,19 @@ class ChatMessage(Base):
     )
 
 
+class ReactionEmoji(Base):
+    """One allowed chat reaction. The full set is admin-editable at runtime."""
+
+    __tablename__ = "reaction_emojis"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    emoji: Mapped[str] = mapped_column(String(16), unique=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class MessageReaction(Base):
     """One player's reaction to one chat message (Telegram-style, one per user/message)."""
 

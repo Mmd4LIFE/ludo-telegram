@@ -97,6 +97,46 @@ class AdminUser(BaseModel):
         )
 
 
+class ReactionEmojiOut(BaseModel):
+    id: int
+    emoji: str
+    position: int = 0
+
+
+class AddReactionRequest(BaseModel):
+    emoji: str
+
+
+class AdminChatSeat(BaseModel):
+    seat_index: int
+    color: str
+    name: str
+    user_id: int | None = None
+    is_bot: bool = False
+
+
+class AdminChatEntry(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    text: str
+    edited: bool = False
+    deleted: bool = False
+    created_at: str | None = None
+    reply_name: str | None = None
+    reply_text: str | None = None
+    reactions: dict[str, int] = {}
+
+
+class AdminChatView(BaseModel):
+    id: int
+    code: str
+    status: str
+    created_at: str | None = None
+    seats: list[AdminChatSeat] = []
+    messages: list[AdminChatEntry] = []
+
+
 class AdminStats(BaseModel):
     users: int
     users_started: int

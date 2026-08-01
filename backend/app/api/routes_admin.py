@@ -15,8 +15,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import require_admin
 from app.database import Base, get_session
-from app.models import Match, MatchStatus, User
-from app.schemas import AdminStats, AdminUser
+from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji
+from app.models import ChatMessage as ChatRow
+from app.schemas import (
+    AddReactionRequest,
+    AdminChatEntry,
+    AdminChatSeat,
+    AdminChatView,
+    AdminStats,
+    AdminUser,
+    ReactionEmojiOut,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -103,6 +112,128 @@ async def data_tables(
         cols = [c.name for c in tbl.columns if c.name not in _REDACT.get(name, set())]
         out.append({"name": name, "rows": int(count or 0), "columns": cols})
     return out
+
+
+# --- reaction emojis (admin-managed) ----------------------------------------
+@router.get("/reactions", response_model=list[ReactionEmojiOut])
+async def list_reactions(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = (
+        await session.execute(
+            select(ReactionEmoji).order_by(ReactionEmoji.position, ReactionEmoji.id)
+        )
+    ).scalars().all()
+    return [ReactionEmojiOut(id=r.id, emoji=r.emoji, position=r.position) for r in rows]
+
+
+@router.post("/reactions", response_model=list[ReactionEmojiOut])
+async def add_reaction(
+    body: AddReactionRequest,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    emoji = body.emoji.strip()
+    if not emoji or len(emoji) > 16:
+        raise HTTPException(400, "Emoji required (max 16 chars)")
+    exists = (
+        await session.execute(select(ReactionEmoji).where(ReactionEmoji.emoji == emoji))
+    ).scalar_one_or_none()
+    if exists is None:
+        top = (
+            await session.execute(select(func.coalesce(func.max(ReactionEmoji.position), -1)))
+        ).scalar_one()
+        session.add(ReactionEmoji(emoji=emoji, position=int(top) + 1))
+        await session.commit()
+    return await list_reactions(_admin=_admin, session=session)
+
+
+@router.delete("/reactions/{reaction_id}", response_model=list[ReactionEmojiOut])
+async def remove_reaction(
+    reaction_id: int,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    row = await session.get(ReactionEmoji, reaction_id)
+    if row is not None:
+        await session.delete(row)
+        await session.commit()
+    return await list_reactions(_admin=_admin, session=session)
+
+
+# --- per-match chat viewer --------------------------------------------------
+@router.get("/matches/{ref}/chat", response_model=AdminChatView)
+async def match_chat(
+    ref: str,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Everything said in one match — by numeric id or room code. Includes deleted
+    messages (flagged) and each message's reaction tallies, plus who sat where."""
+    match = None
+    if ref.isdigit():
+        match = await session.get(Match, int(ref))
+    if match is None:
+        match = (
+            await session.execute(select(Match).where(Match.code == ref.upper()))
+        ).scalar_one_or_none()
+    if match is None:
+        raise HTTPException(404, "Match not found")
+
+    # seats + player names
+    seats_rows = sorted(match.seats, key=lambda s: s.seat_index)
+    ids = [s.user_id for s in seats_rows if s.user_id is not None]
+    names: dict[int, str] = {}
+    if ids:
+        rows = (
+            await session.execute(select(User.id, User.first_name).where(User.id.in_(ids)))
+        ).all()
+        names = {rid: (fn or "Player") for rid, fn in rows}
+    seats = [
+        AdminChatSeat(
+            seat_index=s.seat_index, color=s.color,
+            name=names.get(s.user_id, "Bot" if s.is_bot else "Open"),
+            user_id=s.user_id, is_bot=s.is_bot,
+        )
+        for s in seats_rows
+    ]
+
+    # every message (incl. soft-deleted), oldest first
+    msg_rows = (
+        await session.execute(
+            select(ChatRow).where(ChatRow.match_id == match.id).order_by(ChatRow.id)
+        )
+    ).scalars().all()
+
+    counts: dict[int, dict[str, int]] = {}
+    if msg_rows:
+        mids = [m.id for m in msg_rows]
+        reacts = (
+            await session.execute(
+                select(MessageReaction).where(MessageReaction.message_id.in_(mids))
+            )
+        ).scalars().all()
+        for rx in reacts:
+            counts.setdefault(rx.message_id, {})
+            counts[rx.message_id][rx.emoji] = counts[rx.message_id].get(rx.emoji, 0) + 1
+
+    messages = [
+        AdminChatEntry(
+            id=m.id, user_id=m.user_id, name=m.name, text=m.text,
+            edited=m.edited, deleted=m.deleted_at is not None,
+            created_at=m.created_at.isoformat() if m.created_at else None,
+            reply_name=m.reply_name, reply_text=m.reply_text,
+            reactions=counts.get(m.id, {}),
+        )
+        for m in msg_rows
+    ]
+
+    return AdminChatView(
+        id=match.id, code=match.code, status=match.status.value,
+        created_at=match.created_at.isoformat() if getattr(match, "created_at", None) else None,
+        seats=seats, messages=messages,
+    )
 
 
 @router.get("/data/rows/{table}")

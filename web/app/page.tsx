@@ -37,6 +37,9 @@ import {
   AdminTable,
   AdminRows,
   AdminUser,
+  AdminReaction,
+  AdminChatView,
+  AdminChatSeat,
   ChatMessage,
   REACTIONS,
   DiceState,
@@ -988,10 +991,15 @@ function MatchChat({
   const [menuId, setMenuId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [reactionSet, setReactionSet] = useState<string[]>([...REACTIONS]);
   useEffect(() => {
     let alive = true;
     const load = () => api.getChat(code).then((c) => alive && setChat(c)).catch(() => {});
     load();
+    api
+      .getReactions()
+      .then((r) => alive && r.length && setReactionSet(r))
+      .catch(() => {});
     const id = setInterval(load, 2000);
     return () => {
       alive = false;
@@ -1115,7 +1123,7 @@ function MatchChat({
                   )}
                   {open && (
                     <span className="ml-2 inline-flex flex-wrap items-center gap-1 align-middle">
-                      {REACTIONS.map((emoji) => (
+                      {reactionSet.map((emoji) => (
                         <button
                           key={emoji}
                           onClick={(e) => {
@@ -1722,8 +1730,17 @@ function ProfileStat({ label, value }: { label: string; value: number | string }
 
 /* ---------------------------------------------------------------- admin */
 
+const ADMIN_TABS = ["overview", "data", "chats", "reactions"] as const;
+type AdminTab = (typeof ADMIN_TABS)[number];
+const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
+  overview: "Overview",
+  data: "Data",
+  chats: "Chats",
+  reactions: "Reactions",
+};
+
 function AdminPanel({ onBack }: { onBack: () => void }) {
-  const [tab, setTab] = useState<"overview" | "data">("overview");
+  const [tab, setTab] = useState<AdminTab>("overview");
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [q, setQ] = useState("");
@@ -1777,22 +1794,24 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
         <div className="rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">{err}</div>
       )}
 
-      <div className="flex gap-2">
-        {(["overview", "data"] as const).map((t) => (
+      <div className="flex gap-1.5">
+        {ADMIN_TABS.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={cn(
-              "flex-1 rounded-xl py-2 text-xs font-bold uppercase tracking-wider transition",
+              "flex-1 rounded-xl py-2 text-[11px] font-bold uppercase tracking-wide transition",
               tab === t ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground"
             )}
           >
-            {t === "overview" ? "Overview" : "Data"}
+            {ADMIN_TAB_LABEL[t]}
           </button>
         ))}
       </div>
 
       {tab === "data" && <DataBrowser />}
+      {tab === "chats" && <ChatBrowser />}
+      {tab === "reactions" && <ReactionManager />}
 
       {tab === "overview" && (
       <>
@@ -1980,6 +1999,214 @@ function DataBrowser() {
         </Card>
       )}
     </>
+  );
+}
+
+/* -------------------------------------------------- admin: reactions */
+
+function ReactionManager() {
+  const [rows, setRows] = useState<AdminReaction[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.adminReactions().then(setRows).catch((e) => setErr(String(e)));
+  }, []);
+
+  const add = async () => {
+    const emoji = draft.trim();
+    if (!emoji || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      setRows(await api.adminAddReaction(emoji));
+      setDraft("");
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async (id: number) => {
+    try {
+      setRows(await api.adminRemoveReaction(id));
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  return (
+    <Card>
+      <SectionLabel>Chat reactions</SectionLabel>
+      <p className="mt-1 text-xs text-muted-foreground">
+        The emoji players can react with. Add or remove — changes apply everywhere.
+      </p>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {rows.map((r) => (
+          <div
+            key={r.id}
+            className="flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1.5 ring-1 ring-white/10"
+          >
+            <span className="text-lg leading-none">{r.emoji}</span>
+            <button
+              onClick={() => remove(r.id)}
+              className="grid size-5 place-items-center rounded-full bg-red/80 text-white active:scale-90"
+              aria-label="Remove"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </div>
+        ))}
+        {rows.length === 0 && (
+          <span className="text-xs text-muted-foreground">No reactions yet.</span>
+        )}
+      </div>
+
+      <div className="mt-4 flex gap-2">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          placeholder="Paste an emoji…"
+          maxLength={16}
+          className="min-w-0 flex-1 rounded-xl bg-secondary px-3 py-2 text-lg outline-none ring-1 ring-white/10 focus:ring-primary/50"
+        />
+        <Button onClick={add} disabled={busy || !draft.trim()}>
+          <Plus className="size-4" /> Add
+        </Button>
+      </div>
+      {err && <div className="mt-2 text-xs text-red">{err}</div>}
+    </Card>
+  );
+}
+
+/* -------------------------------------------------- admin: chat viewer */
+
+function ChatBrowser() {
+  const [ref, setRef] = useState("");
+  const [view, setView] = useState<AdminChatView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const look = async () => {
+    const q = ref.trim();
+    if (!q) return;
+    setLoading(true);
+    setErr(null);
+    setView(null);
+    try {
+      setView(await api.adminMatchChat(q));
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const colorOf = (seat?: AdminChatSeat) => (seat ? COLOR_HEX[seat.color] ?? "#8892a6" : "#8892a6");
+  const seatByUser = new Map<number, AdminChatSeat>();
+  view?.seats.forEach((s) => s.user_id != null && seatByUser.set(s.user_id, s));
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Card>
+        <SectionLabel>Find a game</SectionLabel>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Enter a match id or room code to see who played and everything they said.
+        </p>
+        <div className="mt-3 flex gap-2">
+          <input
+            value={ref}
+            onChange={(e) => setRef(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && look()}
+            placeholder="e.g. 42 or ABCDE"
+            className="min-w-0 flex-1 rounded-xl bg-secondary px-3 py-2 text-sm outline-none ring-1 ring-white/10 focus:ring-primary/50"
+          />
+          <Button onClick={look} disabled={loading || !ref.trim()}>
+            {loading ? <Loader2 className="size-4 animate-spin" /> : "View"}
+          </Button>
+        </div>
+        {err && <div className="mt-2 text-xs text-red">{err}</div>}
+      </Card>
+
+      {view && (
+        <>
+          <Card>
+            <div className="flex items-center justify-between">
+              <SectionLabel>
+                Room {view.code} · #{view.id}
+              </SectionLabel>
+              <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold uppercase text-muted-foreground">
+                {view.status}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-col gap-1.5">
+              {view.seats.map((s) => (
+                <div key={s.seat_index} className="flex items-center gap-2 text-sm">
+                  <span className="size-3 shrink-0 rounded-full" style={{ background: colorOf(s) }} />
+                  <span className="flex-1 truncate font-semibold">{s.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {s.is_bot ? "bot" : s.user_id != null ? `#${s.user_id}` : "open"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card>
+            <div className="flex items-center justify-between">
+              <SectionLabel>Messages</SectionLabel>
+              <span className="text-xs text-muted-foreground tabular-nums">{view.messages.length}</span>
+            </div>
+            <div className="mt-2 flex flex-col gap-2">
+              {view.messages.map((m) => {
+                const seat = seatByUser.get(m.user_id);
+                return (
+                  <div
+                    key={m.id}
+                    className={cn(
+                      "rounded-xl bg-secondary/50 px-3 py-2 text-sm ring-1 ring-white/5",
+                      m.deleted && "opacity-60"
+                    )}
+                  >
+                    {m.reply_text && (
+                      <div className="mb-1 border-l-2 border-white/20 pl-2 text-[11px] text-muted-foreground">
+                        <span className="font-bold">{m.reply_name}</span> {m.reply_text}
+                      </div>
+                    )}
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-bold" style={{ color: colorOf(seat) }}>
+                        {m.name}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">#{m.user_id}</span>
+                      {m.edited && <span className="text-[10px] text-muted-foreground">edited</span>}
+                      {m.deleted && (
+                        <span className="rounded bg-red/20 px-1 text-[10px] font-bold text-red">deleted</span>
+                      )}
+                    </div>
+                    <div className={cn("break-words", m.deleted && "line-through")}>{m.text}</div>
+                    {Object.keys(m.reactions).length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {Object.entries(m.reactions).map(([emoji, count]) => (
+                          <span key={emoji} className="rounded-full bg-white/10 px-1.5 py-0.5 text-[11px]">
+                            {emoji} {count}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {view.messages.length === 0 && (
+                <div className="text-xs text-muted-foreground">No messages in this game.</div>
+              )}
+            </div>
+          </Card>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -3,6 +3,12 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.4.4 — Admin: reactions & chat viewer
+- Admins can now manage the chat reactions — add or remove emoji, and the set updates for
+  everyone instantly.
+- New admin Chats tab: look up any game by id or room code to see who played and the full
+  conversation, including edited and deleted messages and their reactions.
+
 ## 0.4.3 — In-game scoreboard & reactions
 - Tap **Scores** at the top of a game to see this game's scoreboard: every player ranked
   by their average roll, with a mini chart of how their dice have fallen and their knocks.

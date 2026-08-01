@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_session
 from app.ludo.board import Color
-from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction
+from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji
 from app.models import ChatMessage as ChatRow
 from datetime import datetime, timezone
 import math
@@ -40,8 +40,15 @@ router = APIRouter(prefix="/api/matches", tags=["matches"])
 
 _COLORS = [Color.RED, Color.GREEN, Color.YELLOW, Color.BLUE]
 
-# The fixed set of chat reactions (Telegram-style). Keep in step with the Mini App.
-ALLOWED_REACTIONS = ("👍", "❤️", "😂", "🔥")
+
+async def _allowed_reactions(session: AsyncSession) -> list[str]:
+    """The admin-managed set of reaction emojis (ordered)."""
+    rows = (
+        await session.execute(
+            select(ReactionEmoji.emoji).order_by(ReactionEmoji.position, ReactionEmoji.id)
+        )
+    ).scalars().all()
+    return list(rows)
 
 # How many recent chat messages a room returns (chat is persisted in chat_messages).
 _CHAT_MAX = 60
@@ -562,7 +569,7 @@ async def react_chat(
 ):
     """Toggle your reaction on a message. One reaction per person per message:
     tapping the same emoji removes it; a different emoji replaces it."""
-    if body.emoji not in ALLOWED_REACTIONS:
+    if body.emoji not in await _allowed_reactions(session):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown reaction")
     match = await _load_room(session, code)
     in_room = any(s.user_id == user.id for s in match.seats) or any(
