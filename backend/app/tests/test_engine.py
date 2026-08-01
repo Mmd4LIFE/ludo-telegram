@@ -27,7 +27,7 @@ from app.ludo import (
     roll_die,
 )
 from app.ludo.bots import choose_move
-from app.ludo.state import Move
+from app.ludo.state import GameState, Move
 
 
 def _check(name: str, cond: bool) -> None:
@@ -46,8 +46,9 @@ def test_geometry() -> None:
     _check("progress 51 is off the ring (home column)", absolute_square(Color.RED, 51) is None)
     _check("base is off the ring", absolute_square(Color.RED, BASE) is None)
     _check("HOME is 56", HOME == 56)
-    _check("8 safe squares", len(SAFE_SQUARES) == 8)
+    _check("4 default safe squares (starts only)", len(SAFE_SQUARES) == 4)
     _check("starts are safe", all(is_safe(o) for o in (0, 13, 26, 39)))
+    _check("neutral stars are NOT safe by default", not any(is_safe(o) for o in (8, 21, 34, 47)))
 
 
 # --- release only on a 6 ----------------------------------------------------
@@ -106,26 +107,36 @@ def test_capture_sends_home_and_grants_turn() -> None:
     _check("capture grants an extra turn", res.extra_turn)
 
 
-def test_safe_square_protects_owner_only() -> None:
-    # A star protects ONLY its owner colour. Owner sitting on their own star is safe…
+def test_start_square_protects_owner_only() -> None:
+    # A colour is always safe on its own START square…
     s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
-    # YELLOW on its OWN start star abs 26 (progress 0 -> abs 26).
-    s.players[1].tokens[0] = 0
+    s.players[1].tokens[0] = 0    # YELLOW on its own start, abs 26
     s.players[0].tokens[0] = 23   # RED abs 23
-    register_roll(s, 3)           # RED -> abs 26 (yellow's own star)
-    _check("setup: red lands on yellow's own star", absolute_square(Color.RED, 26) == 26)
+    register_roll(s, 3)           # RED -> abs 26 (yellow's own start)
+    _check("setup: red lands on yellow's own start", absolute_square(Color.RED, 26) == 26)
     moves = [m for m in legal_moves(s) if m.token_index == 0]
-    _check("owner is safe on its own star", moves and moves[0].captures == ())
+    _check("owner is safe on its own start", moves and moves[0].captures == ())
 
-    # …but a NON-owner sitting on someone else's star is captured.
-    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
-    # YELLOW on abs 8 — that star belongs to RED, so yellow is exposed there.
-    _check("setup: abs 8 is a star", is_safe(8))
-    s.players[1].tokens[0] = 34   # YELLOW abs 8
-    s.players[0].tokens[0] = 5    # RED abs 5
-    register_roll(s, 3)           # RED -> abs 8 (red's own star)
+
+def test_neutral_star_safe_only_when_activated() -> None:
+    # YELLOW's neutral star is abs 34 (26 + 8). YELLOW sits there (progress 8);
+    # RED at progress 31 rolls 3 to land on abs 34.
+    def _setup() -> GameState:
+        st = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+        st.players[1].tokens[0] = 8    # YELLOW abs 34 (its own neutral star)
+        st.players[0].tokens[0] = 31   # RED abs 31
+        register_roll(st, 3)           # RED -> abs 34
+        return st
+
+    _check("setup: abs 34 is not safe by default", not is_safe(34))
+    s = _setup()
     moves = [m for m in legal_moves(s) if m.token_index == 0]
-    _check("intruder on your star is captured", moves and moves[0].captures == ((1, 0),))
+    _check("neutral star captures by default", moves and moves[0].captures == ((1, 0),))
+
+    s = _setup()
+    s.active_stars = [Color.YELLOW.value]   # YELLOW activated its stars
+    moves = [m for m in legal_moves(s) if m.token_index == 0]
+    _check("owner safe on its neutral star once activated", moves and moves[0].captures == ())
 
 
 def test_six_with_no_move_keeps_the_turn() -> None:
@@ -208,7 +219,8 @@ def run_all() -> None:
         test_extra_turn_on_six,
         test_sixes_loop_without_cap,
         test_capture_sends_home_and_grants_turn,
-        test_safe_square_protects_owner_only,
+        test_start_square_protects_owner_only,
+        test_neutral_star_safe_only_when_activated,
         test_six_with_no_move_keeps_the_turn,
         test_must_land_home_exactly,
         test_fuzz_games,

@@ -184,6 +184,25 @@ class PlayerStats(BaseModel):
         )
 
 
+class CardOut(BaseModel):
+    """A fantasy card as the Mini App sees it."""
+
+    id: str
+    name: str
+    icon: str
+    rarity: str
+    effect: str
+    status: str          # "live" | "soon"
+    description: str
+
+    @classmethod
+    def from_row(cls, c) -> "CardOut":
+        return cls(
+            id=c.id, name=c.name, icon=c.icon, rarity=c.rarity,
+            effect=c.effect, status=c.status, description=c.description,
+        )
+
+
 class KnockEvent(BaseModel):
     """One knockout from a match: an actual capture (taken=True) or a passed-up one."""
 

@@ -44,8 +44,8 @@ from app.ludo import (
 from app.ludo.board import HOME, TOKENS_PER_PLAYER, Color
 from app.ludo.bots import choose_move
 from app.game.connection import hub
-from app.models import Match, MatchStatus, DiceRoll, Knockout
-from sqlalchemy import insert
+from app.models import Match, MatchStatus, DiceRoll, Knockout, Card, CardDraw
+from sqlalchemy import insert, select
 
 logger = logging.getLogger("ludo.runtime")
 
@@ -106,6 +106,9 @@ class MatchRuntime:
         # append-only event rows buffered per step, bulk-inserted in _persist (humans only)
         self.buf_rolls: list[dict] = []
         self.buf_knocks: list[dict] = []
+        self.buf_cards: list[dict] = []
+        # the in-progress fantasy-card draw, surfaced to the client (None when idle)
+        self._card: dict | None = None
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -282,6 +285,75 @@ class MatchRuntime:
             await self._broadcast()
             await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
+            # Bringing a token home earns a fantasy-card draw (humans only) — the reward
+            # that replaced the old "reach home = extra roll".
+            if res.reached_home and mover is not None:
+                await self._draw_card(seat, turn_no)
+
+    async def _draw_card(self, seat: int, turn_no: int) -> None:
+        """Offer four random cards face-down, wait for the player's pick (auto-pick on
+        timeout), reveal all four, apply the pick, and log the draw."""
+        uid = self._human_uid(seat)
+        if uid is None:
+            return
+        # the catalog lives in the DB (seeded by migration) — read the enabled ids + effects
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(Card.id, Card.effect).where(Card.enabled.is_(True))
+                )
+            ).all()
+        effects = {cid: eff for cid, eff in rows}
+        if len(effects) < 4:
+            return   # catalog too small to offer a draw (shouldn't happen)
+        options = self._rng.sample(list(effects.keys()), 4)
+
+        self._card = {"seat": seat, "stage": "pick"}   # face-down; ids withheld until reveal
+        self._deadline = time.time() + settings.CARD_PICK_SECONDS
+        await self._broadcast()
+        got = await self._drain_for(seat, "pick_card", settings.CARD_PICK_SECONDS)
+        self._deadline = None
+
+        if got is not None:
+            try:
+                idx = int(got.get("index", 0))
+            except (TypeError, ValueError):
+                idx = 0
+        else:
+            idx = self._rng.randint(0, 3)
+        idx = max(0, min(3, idx))
+        picked = options[idx]
+
+        self._apply_card(seat, effects[picked])
+        self.buf_cards.append({
+            "match_id": self.match_id, "user_id": uid, "seat": seat,
+            "options": options, "picked": picked, "turn": turn_no,
+        })
+        self._card = {"seat": seat, "stage": "reveal", "options": options, "picked": idx}
+        await self._broadcast()
+        await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
+        self._card = None
+        await self._broadcast()
+
+    def _apply_card(self, seat: int, effect: str) -> None:
+        """Apply a drawn card's effect. Only the 'live' effects change play today; the rest
+        are drawable but inert (see docs/prd/fantasy-cards.md for the roadmap)."""
+        if effect == "active_stars":
+            c = self.state.players[seat].color.value
+            if c not in self.state.active_stars:
+                self.state.active_stars.append(c)
+        elif effect == "extra_roll":
+            # hand the turn back to the drawer for one more roll
+            if (
+                self.state.phase is not Phase.FINISHED
+                and not self.state.players[seat].all_home()
+            ):
+                self.state.current = seat
+                self.state.phase = Phase.ROLL
+                self.state.die = None
+                self.state.consecutive_sixes = 0
+        # every other effect is not wired into gameplay yet (roadmap)
+
     async def _think(self) -> None:
         await asyncio.sleep(self._rng.uniform(settings.BOT_THINK_MIN, settings.BOT_THINK_MAX))
 
@@ -303,6 +375,7 @@ class MatchRuntime:
             "seat_dealt": {str(k): v for k, v in self.game_dealt.items()},
             "seat_taken": {str(k): v for k, v in self.game_taken.items()},
             "seat_potential": {str(k): v for k, v in self.game_potential.items()},
+            "card": self._card,   # in-progress fantasy-card draw (None when idle)
             "removed_seats": sorted(self.removed_seats),
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
             # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
@@ -329,6 +402,9 @@ class MatchRuntime:
             if self.buf_knocks:
                 await session.execute(insert(Knockout), self.buf_knocks)
                 self.buf_knocks = []
+            if self.buf_cards:
+                await session.execute(insert(CardDraw), self.buf_cards)
+                self.buf_cards = []
             # Fold any dice/capture deltas accumulated since the last persist into the
             # players' lifetime totals in the SAME commit — this is what makes an in-game
             # profile card reflect the current game's rolls (rather than only updating when

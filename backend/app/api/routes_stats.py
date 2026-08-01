@@ -12,10 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_session
-from app.models import User, ReactionEmoji
-from app.schemas import PlayerStats
+from app.models import User, ReactionEmoji, Card
+from app.schemas import PlayerStats, CardOut
 
 router = APIRouter(prefix="/api", tags=["stats"])
+
+
+@router.get("/cards", response_model=list[CardOut])
+async def cards(
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """The fantasy-card catalog (enabled cards), ordered for display."""
+    rows = (
+        await session.execute(
+            select(Card).where(Card.enabled.is_(True)).order_by(Card.position, Card.id)
+        )
+    ).scalars().all()
+    return [CardOut.from_row(c) for c in rows]
 
 
 @router.get("/reactions", response_model=list[str])

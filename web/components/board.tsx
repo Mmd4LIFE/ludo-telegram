@@ -105,8 +105,11 @@ function homeCircle(slots: [number, number][]) {
   return { cx: cx * CELL, cy: cy * CELL, r: (reach + TOKEN_R + HOME_PAD) * CELL };
 }
 
-const SAFE = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
 const START_ABS = new Set(Object.values(START_OFFSET));
+// neutral star cells (8 past each start) → the colour they belong to. Inert (grey) until
+// that colour activates them via the Starfall card; then they're that colour and safe.
+const NEUTRAL_STARS: Record<number, string> = { 8: "RED", 21: "GREEN", 34: "YELLOW", 47: "BLUE" };
+const COLOR_BY_VALUE = ["RED", "GREEN", "YELLOW", "BLUE"];
 
 const px = (c: number, r: number): [number, number] => [(c + 0.5) * CELL, (r + 0.5) * CELL];
 
@@ -158,6 +161,7 @@ export default function Board({
   onPlayerTap?: (userId: number) => void;
 }) {
   const removed = new Set(removedSeats);
+  const activeStars = new Set((state.active_stars ?? []).map((v) => COLOR_BY_VALUE[v]));
   const movable = new Set(legal.map((m) => m.token_index));
   const myTurn = mySeat !== null && state.current === mySeat && state.phase === "move";
   const moverColor = state.players[state.current]?.color ?? "RED";
@@ -274,15 +278,35 @@ export default function Board({
           ))
         )}
 
-        {/* safe stars — drawn as SVG polygons (no emoji), upright regardless of rotation */}
-        {[...SAFE].map((abs) => {
+        {/* start-square stars — always a safe sanctuary, drawn in the owner's colour */}
+        {[...START_ABS].map((abs) => {
           const [c, r] = TRACK[abs];
           const [x, y] = px(c, r);
+          const col = Object.entries(START_OFFSET).find(([, o]) => o === abs)?.[0] ?? "RED";
           return (
             <polygon
-              key={abs}
+              key={`start-${abs}`}
               points={starPts(x, y, CELL * 0.28)}
-              fill="#aeb4c0"
+              fill={COLORS[col]}
+              opacity={0.55}
+              transform={`rotate(${-rot} ${x} ${y})`}
+            />
+          );
+        })}
+
+        {/* neutral stars — inert grey until their colour lights them up (Starfall card),
+            then shown in that colour to signal the square is now safe for the owner */}
+        {Object.entries(NEUTRAL_STARS).map(([absStr, col]) => {
+          const abs = Number(absStr);
+          const [c, r] = TRACK[abs];
+          const [x, y] = px(c, r);
+          const on = activeStars.has(col);
+          return (
+            <polygon
+              key={`neutral-${abs}`}
+              points={starPts(x, y, CELL * (on ? 0.3 : 0.24))}
+              fill={on ? COLORS[col] : "#cdd2db"}
+              opacity={on ? 0.95 : 0.4}
               transform={`rotate(${-rot} ${x} ${y})`}
             />
           );

@@ -73,6 +73,9 @@ class GameState:
     consecutive_sixes: int = 0       # triple-6 forfeits the turn
     turn: int = 0                    # monotonically increasing turn counter
     ranking: list[int] = field(default_factory=list)  # seats in finishing order
+    # colour VALUES (0..3) whose neutral stars are active (safe) — set by the
+    # "Active Stars" fantasy card. Empty by default: neutral stars protect no one.
+    active_stars: list[int] = field(default_factory=list)
 
     # ---- convenience ------------------------------------------------------
     @property
@@ -95,6 +98,7 @@ class GameState:
             "consecutive_sixes": self.consecutive_sixes,
             "turn": self.turn,
             "ranking": list(self.ranking),
+            "active_stars": list(self.active_stars),
         }
 
     @classmethod
@@ -115,4 +119,5 @@ class GameState:
             consecutive_sixes=d.get("consecutive_sixes", 0),
             turn=d.get("turn", 0),
             ranking=list(d.get("ranking", [])),
+            active_stars=list(d.get("active_stars", [])),
         )

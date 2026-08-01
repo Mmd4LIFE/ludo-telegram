@@ -30,6 +30,7 @@ from app.ludo.board import (
     TOKENS_PER_PLAYER,
     Color,
     absolute_square,
+    neutral_star_owner,
     safe_owner,
 )
 from app.ludo.state import GameState, Move, Phase, PlayerState
@@ -138,7 +139,9 @@ def _captures_at(state: GameState, mover: Color, dst: int) -> list[tuple[int, in
     dst_sq = absolute_square(mover, dst)
     if dst_sq is None:
         return []
-    owner = safe_owner(dst_sq)  # colour this square protects, or None
+    owner = safe_owner(dst_sq)               # start-square sanctuary colour, or None
+    nstar = neutral_star_owner(dst_sq)       # neutral-star colour, or None
+    active = set(state.active_stars)         # colours whose neutral stars are live
 
     hits: dict[int, tuple[list[int], Color]] = {}
     for seat, p in enumerate(state.players):
@@ -151,7 +154,10 @@ def _captures_at(state: GameState, mover: Color, dst: int) -> list[tuple[int, in
     captured: list[tuple[int, int]] = []
     for seat, (toks, color) in hits.items():
         if owner == color:
-            # the square's own colour is safe here; everyone else is exposed
+            # a colour is always safe on its own start square
+            continue
+        if nstar == color and color.value in active:
+            # …and safe on its own neutral star once that colour has activated stars
             continue
         if len(toks) >= 2:
             # a blockade of >=2 same-colour tokens is not captured
@@ -205,8 +211,10 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
         player.finished_at = state.turn
         state.ranking.append(state.current)
 
-    # Extra turn on a six (always, looping), a capture, or sending a token home.
-    extra_turn = _six_pays_extra(state) or bool(move.captures) or reached_home
+    # Extra turn on a six (always, looping) or a capture. Reaching home no longer grants a
+    # bonus roll — the reward for finishing a token is a fantasy-card draw, handled by the
+    # operational layer (see MatchRuntime), not the pure engine.
+    extra_turn = _six_pays_extra(state) or bool(move.captures)
     _end_turn(state, extra_turn=extra_turn)
 
     return ApplyResult(

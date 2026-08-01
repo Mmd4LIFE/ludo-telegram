@@ -3,6 +3,15 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.5.0 — Fantasy cards
+- Bring a token home and you no longer just get another roll — you draw a **fantasy card**.
+  Four cards appear face-down; pick one, watch them all flip, and claim your prize.
+- Two powers are live to start: **Encore** (roll again) and **Starfall** (light up your
+  colour's stars so you're safe on them). More are on the way — you can already draw and
+  see them all.
+- Stars reworked: the four neutral stars are no longer safe for anyone by default — they
+  light up (and protect you) only once you play Starfall for your colour.
+
 ## 0.4.6 — Knocks & missed knocks
 - The game now tracks not just the opponents you knock home, but the ones you *could* have
   knocked and didn't — your "could've" count.

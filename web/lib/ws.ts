@@ -16,6 +16,15 @@ export interface GameState {
   consecutive_sixes: number;
   turn: number;
   ranking: number[];
+  active_stars: number[]; // colour values whose neutral stars are live/safe
+}
+
+// an in-progress fantasy-card draw (reach-home reward)
+export interface CardDraw {
+  seat: number;
+  stage: "pick" | "reveal";
+  options?: string[]; // card ids — present only at the reveal stage
+  picked?: number; // chosen index — present only at the reveal stage
 }
 
 export interface LegalMove {
@@ -40,6 +49,7 @@ export interface StatePayload {
   seat_dealt: Record<string, number>; // this game: seat -> captures dealt
   seat_taken: Record<string, number>; // this game: seat -> captures suffered
   seat_potential: Record<string, number>; // this game: seat -> captures passed up
+  card: CardDraw | null; // in-progress fantasy-card draw
   removed_seats: number[];
   legal_moves: LegalMove[];
   deadline: number | null; // unix seconds the current player must act by (or null)
@@ -85,6 +95,9 @@ export class MatchSocket {
   }
   rematch(): void {
     this.send({ type: "rematch" });
+  }
+  pickCard(index: number): void {
+    this.send({ type: "pick_card", index });
   }
 
   close(): void {

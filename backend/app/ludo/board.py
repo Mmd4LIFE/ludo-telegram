@@ -25,9 +25,11 @@ A token's absolute ring cell is ``(START_OFFSET[colour] + progress) % 52`` while
 column and no longer has an absolute ring cell (home columns never collide, so no capture
 can happen there).
 
-Safe squares (stars): the four start cells plus the four cells eight steps after each
-start. A token on a safe square cannot be captured and any number of tokens may rest
-there. Everywhere else on the ring, landing on a lone opponent captures it.
+Safe squares: by default ONLY the four coloured start cells are safe, each a private
+sanctuary for its own colour. The four *neutral* star cells (eight steps past each start)
+are NOT safe for anyone — they are inert until a player activates their colour's stars via
+the "Active Stars" fantasy card, after which that colour is safe on its own neutral star.
+Everywhere else on the ring, landing on a lone opponent captures it.
 """
 from __future__ import annotations
 
@@ -60,26 +62,29 @@ START_OFFSET: dict[Color, int] = {
     Color.BLUE: 39,
 }
 
-# Star / safe cells: the four starts + four cells 8 steps past each start.
-SAFE_SQUARES: frozenset[int] = frozenset(
-    {off for off in START_OFFSET.values()}
-    | {(off + 8) % MAIN_TRACK_LEN for off in START_OFFSET.values()}
-)
-
-# Which colour *owns* each safe square (its start + the star 8 steps on). A token is
-# protected ONLY on a safe square owned by its own colour — on every other square (safe or
-# not) it can be captured. So each star is a private sanctuary for one colour, not a
-# shared one: landing on your own star captures intruders, but you cannot capture the
+# Default safe cells: ONLY the four coloured start cells. Each is a private sanctuary for
+# its own colour — landing on your own start captures intruders, but you can't capture the
 # owner sitting on theirs.
-SAFE_OWNER: dict[int, Color] = {}
-for _color, _off in START_OFFSET.items():
-    SAFE_OWNER[_off] = _color
-    SAFE_OWNER[(_off + 8) % MAIN_TRACK_LEN] = _color
+SAFE_SQUARES: frozenset[int] = frozenset(START_OFFSET.values())
+
+SAFE_OWNER: dict[int, Color] = {off: color for color, off in START_OFFSET.items()}
+
+# The four NEUTRAL star cells (8 steps past each start) and the colour each belongs to.
+# They are NOT safe by default; a colour becomes safe on its own neutral star only after
+# activating stars via the "Active Stars" fantasy card (tracked on GameState.active_stars).
+NEUTRAL_STARS: dict[int, Color] = {
+    (off + 8) % MAIN_TRACK_LEN: color for color, off in START_OFFSET.items()
+}
 
 
 def safe_owner(square: int) -> Color | None:
-    """The colour a safe square protects, or ``None`` if it is not a safe square."""
+    """The colour a *default* safe square (a start) protects, or ``None``."""
     return SAFE_OWNER.get(square)
+
+
+def neutral_star_owner(square: int) -> Color | None:
+    """The colour a neutral star belongs to (safe only once that colour activates), else None."""
+    return NEUTRAL_STARS.get(square)
 
 
 def absolute_square(color: Color, progress: int) -> int | None:

@@ -2,6 +2,7 @@
 // Holds the session JWT in memory + localStorage and attaches it as a Bearer header.
 
 import { getInitData } from "./telegram";
+import type { Card } from "./cards";
 
 const TOKEN_KEY = "ludo_token";
 
@@ -264,6 +265,7 @@ export const api = {
   scoreboard: (limit = 50) => req<PlayerStats[]>("GET", `/api/scoreboard?limit=${limit}`),
   userProfile: (id: number) => req<PlayerStats>("GET", `/api/users/${id}/profile`),
   getReactions: () => req<string[]>("GET", "/api/reactions"),
+  getCards: () => req<Card[]>("GET", "/api/cards"),
   matchKnocks: (code: string) => req<KnockEvent[]>("GET", `/api/matches/${code}/knocks`),
   adminStats: () => req<AdminStats>("GET", "/api/admin/stats"),
   adminKnocks: () => req<AdminKnockRow[]>("GET", "/api/admin/knocks"),

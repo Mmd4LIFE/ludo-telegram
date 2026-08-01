@@ -57,7 +57,8 @@ import {
   shareRoom,
   startParam,
 } from "@/lib/telegram";
-import { GameState, LegalMove, MatchSocket, StatePayload } from "@/lib/ws";
+import { GameState, LegalMove, MatchSocket, StatePayload, CardDraw } from "@/lib/ws";
+import { Card as CardDef, rarityColor } from "@/lib/cards";
 import { Button } from "@/components/ui/button";
 import { Card, SectionLabel } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -137,6 +138,7 @@ function Home() {
   const [seatSkins, setSeatSkins] = useState<Record<string, string>>({});
   const [seatDice, setSeatDice] = useState<Record<string, number>>({});
   const [gameStats, setGameStats] = useState<GameStats>({ rolls: {}, dealt: {}, taken: {}, potential: {} });
+  const [cardDraw, setCardDraw] = useState<CardDraw | null>(null);
   const [removedSeats, setRemovedSeats] = useState<number[]>([]);
   const [clock, setClock] = useState<Clock | null>(null);
   const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
@@ -170,6 +172,7 @@ function Home() {
           taken: p.seat_taken ?? {},
           potential: p.seat_potential ?? {},
         });
+        setCardDraw(p.card ?? null);
         setRemovedSeats(p.removed_seats ?? []);
         setClock({
           deadline: p.deadline,
@@ -303,6 +306,7 @@ function Home() {
         seatSkins={seatSkins}
         seatDice={seatDice}
         gameStats={gameStats}
+        card={cardDraw}
         removedSeats={removedSeats}
         clock={clock}
         rematch={rematch}
@@ -1334,6 +1338,7 @@ function LiveMatch({
   seatSkins,
   seatDice,
   gameStats,
+  card,
   removedSeats,
   clock,
   rematch,
@@ -1350,6 +1355,7 @@ function LiveMatch({
   seatSkins: Record<string, string>;
   seatDice: Record<string, number>;
   gameStats: GameStats;
+  card: CardDraw | null;
   removedSeats: number[];
   clock: Clock | null;
   rematch: { votes: number[]; humanIds: number[] };
@@ -1500,6 +1506,17 @@ function LiveMatch({
           />
         </>
       )}
+      {card && (
+        <ChanceBox
+          card={card}
+          mine={card.seat === mySeat}
+          drawerName={seatNames[String(card.seat)] || "A player"}
+          onPick={(i) => {
+            haptic("medium");
+            sock?.pickCard(i);
+          }}
+        />
+      )}
       {profileId != null && (
         <ProfileSheet userId={profileId} onClose={() => setProfileId(null)} />
       )}
@@ -1516,6 +1533,140 @@ function LiveMatch({
         />
       )}
     </main>
+  );
+}
+
+/* --------------------------------------------------- fantasy card draw */
+
+function ChanceBox({
+  card,
+  mine,
+  drawerName,
+  onPick,
+}: {
+  card: CardDraw;
+  mine: boolean;
+  drawerName: string;
+  onPick: (index: number) => void;
+}) {
+  const [catalog, setCatalog] = useState<Record<string, CardDef>>({});
+  const [tapped, setTapped] = useState<number | null>(null);
+  useEffect(() => {
+    api
+      .getCards()
+      .then((cs) => setCatalog(Object.fromEntries(cs.map((c) => [c.id, c]))))
+      .catch(() => {});
+  }, []);
+
+  const revealed = card.stage === "reveal";
+  const options = card.options ?? [];
+  const pickedIdx = card.picked ?? -1;
+  const pickedCard = revealed && options[pickedIdx] ? catalog[options[pickedIdx]] : null;
+
+  const title = revealed
+    ? mine
+      ? "You drew"
+      : `${drawerName} drew`
+    : mine
+      ? "You brought a token home!"
+      : `${drawerName} is choosing`;
+  const subtitle = revealed
+    ? pickedCard
+      ? pickedCard.name
+      : "…"
+    : mine
+      ? "Pick a card — your prize"
+      : "A card is being drawn…";
+
+  const tap = (i: number) => {
+    if (!mine || revealed || tapped !== null) return;
+    setTapped(i);
+    onPick(i);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/70 px-6 backdrop-blur-md">
+      <div className="mb-1 text-center text-xs font-bold uppercase tracking-widest text-primary">{title}</div>
+      <div className="mb-5 text-center text-2xl font-extrabold text-white">{subtitle}</div>
+
+      <div className="grid w-full max-w-xs grid-cols-2 gap-3">
+        {[0, 1, 2, 3].map((i) => {
+          const c = revealed ? catalog[options[i]] : null;
+          const isPicked = revealed && i === pickedIdx;
+          const flipped = revealed;
+          return (
+            <button
+              key={i}
+              onClick={() => tap(i)}
+              disabled={!mine || revealed}
+              className={cn(
+                "transition-transform",
+                !revealed && mine && tapped === null && "active:scale-95",
+                revealed && !isPicked && "opacity-40",
+                tapped === i && !revealed && "scale-105"
+              )}
+              style={{ perspective: 800 }}
+            >
+              <div
+                style={{
+                  position: "relative",
+                  aspectRatio: "3 / 4",
+                  transformStyle: "preserve-3d",
+                  transition: "transform 0.5s",
+                  transform: flipped ? "rotateY(180deg)" : "none",
+                }}
+              >
+                {/* back */}
+                <div
+                  style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}
+                  className="grid place-items-center rounded-2xl border-2 border-white/15 bg-gradient-to-br from-primary/40 to-secondary shadow-lg"
+                >
+                  <span className="text-4xl font-black text-white/70">?</span>
+                </div>
+                {/* front */}
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    backfaceVisibility: "hidden",
+                    transform: "rotateY(180deg)",
+                    borderColor: c ? rarityColor(c.rarity) : "#333",
+                    boxShadow: isPicked && c ? `0 0 18px ${rarityColor(c.rarity)}` : undefined,
+                  }}
+                  className="flex flex-col items-center justify-center gap-1 rounded-2xl border-2 bg-card p-2 text-center"
+                >
+                  {c && (
+                    <>
+                      <span className="text-3xl leading-none">{c.icon}</span>
+                      <span className="text-[13px] font-extrabold leading-tight">{c.name}</span>
+                      <span
+                        className="text-[8px] font-bold uppercase tracking-wide"
+                        style={{ color: rarityColor(c.rarity) }}
+                      >
+                        {c.rarity}
+                      </span>
+                      <span className="text-[9px] leading-tight text-muted-foreground">{c.description}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {revealed && pickedCard && (
+        <div className="mt-5 max-w-xs text-center">
+          <p className="text-sm text-white/90">{pickedCard.description}</p>
+          {pickedCard.status !== "live" && (
+            <p className="mt-1 text-[11px] text-muted-foreground">✨ Coming soon — effect not active yet.</p>
+          )}
+        </div>
+      )}
+      {!revealed && mine && (
+        <p className="mt-5 text-xs text-muted-foreground">Tap a card to reveal your fate</p>
+      )}
+    </div>
   );
 }
 
