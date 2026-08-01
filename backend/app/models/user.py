@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -33,6 +34,12 @@ class User(Base, TimestampMixin):
     xp: Mapped[int] = mapped_column(Integer, default=0)
     games_played: Mapped[int] = mapped_column(Integer, default=0)
     games_won: Mapped[int] = mapped_column(Integer, default=0)
+
+    # lifetime dice + combat stats (fed by finished games)
+    # dice_hist: {"1": n, ..., "6": n} — count of each die face this player has ever rolled.
+    dice_hist: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    captures_dealt: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # you knocked others home
+    captures_taken: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # others knocked you home
 
     # cosmetics — which die face this player rolls with
     dice_skin: Mapped[str] = mapped_column(String(16), default="classic", server_default="classic")

@@ -137,9 +137,11 @@ export default function Board({
   seatLevels,
   seatDice,
   seatSkins,
+  seatUser,
   removedSeats,
   clock,
   onMove,
+  onPlayerTap,
 }: {
   state: GameState;
   legal: LegalMove[];
@@ -149,9 +151,11 @@ export default function Board({
   seatLevels: Record<string, number>;
   seatDice: Record<string, number>;
   seatSkins: Record<string, string>;
+  seatUser?: Record<string, number | null>;
   removedSeats: number[];
   clock: { deadline: number | null; now: number; recvAt: number; turnSeconds: number } | null;
   onMove: (tokenIndex: number) => void;
+  onPlayerTap?: (userId: number) => void;
 }) {
   const removed = new Set(removedSeats);
   const movable = new Set(legal.map((m) => m.token_index));
@@ -411,19 +415,31 @@ export default function Board({
                 />
               )}
 
-              <g transform={`rotate(${-rot} ${cx + nx} ${cy + ny})`}>
-                <text
-                  x={cx + nx}
-                  y={cy + ny}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontSize={CELL * 0.42}
-                  fontWeight={700}
-                  fill={gone ? "#98a2b6" : seat === mySeat ? COLORS[p.color] : "#5b6478"}
-                >
-                  {gone ? "Left" : seat === mySeat ? `${name} (you)` : name}
-                </text>
-              </g>
+              {(() => {
+                const uid = seatUser?.[String(seat)] ?? null;
+                const tappable = !gone && uid != null && !!onPlayerTap;
+                return (
+                  <g
+                    transform={`rotate(${-rot} ${cx + nx} ${cy + ny})`}
+                    pointerEvents={tappable ? "auto" : "none"}
+                    style={tappable ? { cursor: "pointer" } : undefined}
+                    onClick={tappable ? () => onPlayerTap!(uid!) : undefined}
+                  >
+                    <text
+                      x={cx + nx}
+                      y={cy + ny}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      fontSize={CELL * 0.42}
+                      fontWeight={700}
+                      fill={gone ? "#98a2b6" : seat === mySeat ? COLORS[p.color] : "#5b6478"}
+                      style={tappable ? { textDecoration: "underline", textDecorationThickness: "0.5px" } : undefined}
+                    >
+                      {gone ? "Left" : seat === mySeat ? `${name} (you)` : name}
+                    </text>
+                  </g>
+                );
+              })()}
 
               {!gone && (
               <g transform={`rotate(${-rot} ${cx + lx} ${cy + ly})`}>

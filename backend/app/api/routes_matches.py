@@ -14,6 +14,7 @@ from app.api.deps import get_current_user
 from app.database import get_session
 from app.ludo.board import Color
 from app.models import Match, MatchSeat, MatchStatus, User
+from app.models import ChatMessage as ChatRow
 import math
 import random
 import time
@@ -37,9 +38,7 @@ router = APIRouter(prefix="/api/matches", tags=["matches"])
 
 _COLORS = [Color.RED, Color.GREEN, Color.YELLOW, Color.BLUE]
 
-# Ephemeral per-room lobby chat (in memory — a waiting room is short-lived, so this
-# deliberately avoids a table/migration). Capped so a room can't grow unbounded.
-_CHAT: dict[str, list[dict]] = {}
+# How many recent chat messages a room returns (chat is persisted in chat_messages).
 _CHAT_MAX = 60
 
 # Joiners awaiting the host's approval: room code -> [{user_id, name}]
@@ -352,7 +351,6 @@ async def delete_match(
     if match.status is MatchStatus.PLAYING:
         raise HTTPException(status.HTTP_409_CONFLICT, "Game already started")
     match.status = MatchStatus.ABANDONED
-    _CHAT.pop(match.code, None)
     _PENDING.pop(match.code, None)
     _DICE.pop(match.code, None)
     return {"ok": True}
@@ -406,6 +404,27 @@ async def roll_dice(
     return _dice_state(match.code)
 
 
+def _to_msg(row: ChatRow) -> ChatMessage:
+    return ChatMessage(
+        id=row.id, user_id=row.user_id, name=row.name, text=row.text,
+        edited=row.edited, reply_to=row.reply_to,
+        reply_name=row.reply_name, reply_text=row.reply_text,
+    )
+
+
+async def _recent_chat(session: AsyncSession, match_id: int) -> list[ChatMessage]:
+    """The last _CHAT_MAX messages for a match, oldest → newest."""
+    rows = (
+        await session.execute(
+            select(ChatRow)
+            .where(ChatRow.match_id == match_id)
+            .order_by(ChatRow.id.desc())
+            .limit(_CHAT_MAX)
+        )
+    ).scalars().all()
+    return [_to_msg(r) for r in reversed(rows)]
+
+
 @router.get("/{code}/chat", response_model=list[ChatMessage])
 async def get_chat(
     code: str,
@@ -413,7 +432,7 @@ async def get_chat(
     session: AsyncSession = Depends(get_session),
 ):
     match = await _load_room(session, code)
-    return [ChatMessage(**m) for m in _CHAT.get(match.code, [])]
+    return await _recent_chat(session, match.id)
 
 
 @router.post("/{code}/chat", response_model=list[ChatMessage])
@@ -433,26 +452,28 @@ async def send_chat(
     if not in_room:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Join the room to chat")
     # (chat stays available while the game is playing, not just in the waiting room)
-    msgs = _CHAT.setdefault(match.code, [])
-    entry = {
-        "id": (msgs[-1]["id"] + 1) if msgs else 1,
-        "user_id": user.id,
-        "name": user.first_name or "Player",
-        "text": text,
-        "edited": False,
-        "reply_to": None,
-        "reply_name": None,
-        "reply_text": None,
-    }
+    row = ChatRow(
+        match_id=match.id,
+        user_id=user.id,
+        name=user.first_name or "Player",
+        text=text,
+        edited=False,
+    )
     if body.reply_to is not None:
-        parent = next((m for m in msgs if m["id"] == body.reply_to), None)
+        parent = (
+            await session.execute(
+                select(ChatRow).where(
+                    ChatRow.id == body.reply_to, ChatRow.match_id == match.id
+                )
+            )
+        ).scalar_one_or_none()
         if parent is not None:
-            entry["reply_to"] = parent["id"]
-            entry["reply_name"] = parent.get("name")
-            entry["reply_text"] = (parent.get("text") or "")[:80]
-    msgs.append(entry)
-    del msgs[:-_CHAT_MAX]
-    return [ChatMessage(**m) for m in msgs]
+            row.reply_to = parent.id
+            row.reply_name = parent.name
+            row.reply_text = (parent.text or "")[:80]
+    session.add(row)
+    await session.commit()
+    return await _recent_chat(session, match.id)
 
 
 @router.patch("/{code}/chat/{msg_id}", response_model=list[ChatMessage])
@@ -468,15 +489,19 @@ async def edit_chat(
     text = body.text.strip()[:200]
     if not text:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty message")
-    msgs = _CHAT.get(match.code, [])
-    m = next((m for m in msgs if m["id"] == msg_id), None)
-    if m is None:
+    row = (
+        await session.execute(
+            select(ChatRow).where(ChatRow.id == msg_id, ChatRow.match_id == match.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
-    if m["user_id"] != user.id:
+    if row.user_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your message")
-    m["text"] = text
-    m["edited"] = True
-    return [ChatMessage(**m) for m in msgs]
+    row.text = text
+    row.edited = True
+    await session.commit()
+    return await _recent_chat(session, match.id)
 
 
 @router.delete("/{code}/chat/{msg_id}", response_model=list[ChatMessage])
@@ -488,11 +513,15 @@ async def delete_chat(
 ):
     """Delete one of your own messages."""
     match = await _load_room(session, code)
-    msgs = _CHAT.get(match.code, [])
-    m = next((m for m in msgs if m["id"] == msg_id), None)
-    if m is None:
-        return [ChatMessage(**x) for x in msgs]
-    if m["user_id"] != user.id:
+    row = (
+        await session.execute(
+            select(ChatRow).where(ChatRow.id == msg_id, ChatRow.match_id == match.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return await _recent_chat(session, match.id)
+    if row.user_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your message")
-    _CHAT[match.code] = [x for x in msgs if x["id"] != msg_id]
-    return [ChatMessage(**x) for x in _CHAT[match.code]]
+    await session.delete(row)
+    await session.commit()
+    return await _recent_chat(session, match.id)

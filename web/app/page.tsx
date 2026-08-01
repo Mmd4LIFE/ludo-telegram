@@ -40,6 +40,7 @@ import {
   ChatMessage,
   DiceState,
   MatchSummary,
+  PlayerStats,
   Profile,
 } from "@/lib/api";
 import {
@@ -317,7 +318,7 @@ function Home() {
       )}
       {view === "shop" && <ComingSoon title="Shop" />}
       {view === "friends" && <ComingSoon title="Friends" />}
-      {view === "ranks" && <ComingSoon title="Ranks" />}
+      {view === "ranks" && <Scoreboard meId={profile.id} />}
       <BottomNav view={view} onChange={setView} />
       {noticeBanner}
     </>
@@ -1277,6 +1278,7 @@ function LiveMatch({
   sock: MatchSocket | null;
   onLeave: () => void;
 }) {
+  const [profileId, setProfileId] = useState<number | null>(null);
   const mySeat = (() => {
     for (const [seat, uid] of Object.entries(seatUser)) {
       if (uid === profile.id) return Number(seat);
@@ -1357,11 +1359,16 @@ function LiveMatch({
           seatLevels={seatLevels}
           seatSkins={seatSkins}
           seatDice={seatDice}
+          seatUser={seatUser}
           removedSeats={removedSeats}
           clock={clock}
           onMove={(ti) => {
             haptic("light");
             sock?.move(ti);
+          }}
+          onPlayerTap={(uid) => {
+            haptic("light");
+            setProfileId(uid);
           }}
         />
       </Card>
@@ -1402,7 +1409,113 @@ function LiveMatch({
           />
         </>
       )}
+      {profileId != null && (
+        <ProfileSheet userId={profileId} onClose={() => setProfileId(null)} />
+      )}
     </main>
+  );
+}
+
+/* -------------------------------------------------------- player profile */
+
+const DIE_PIP: Record<number, string> = { 1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅" };
+
+function ProfileSheet({ userId, onClose }: { userId: number; onClose: () => void }) {
+  const [stats, setStats] = useState<PlayerStats | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setStats(null);
+    setErr(false);
+    api
+      .userProfile(userId)
+      .then((s) => live && setStats(s))
+      .catch(() => live && setErr(true));
+    return () => {
+      live = false;
+    };
+  }, [userId]);
+
+  const maxCount = stats ? Math.max(1, ...Object.values(stats.dice)) : 1;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="lb-pop w-full max-w-md rounded-t-3xl bg-card p-5 pb-8 ring-1 ring-white/10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20" />
+        {err && <div className="py-8 text-center text-sm text-muted-foreground">Couldn&apos;t load this player.</div>}
+        {!err && !stats && <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>}
+        {stats && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="flex size-12 items-center justify-center rounded-2xl bg-primary text-lg font-extrabold text-primary-foreground">
+                {(stats.first_name || "P").charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-lg font-extrabold">{stats.first_name}</div>
+                <div className="text-xs text-muted-foreground">
+                  Level {stats.level} · {stats.games_won}/{stats.games_played} wins
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <ProfileStat label="Avg roll" value={stats.dice_avg ? stats.dice_avg.toFixed(2) : "—"} />
+              <ProfileStat label="Knocks" value={stats.captures_dealt} />
+              <ProfileStat label="Knocked" value={stats.captures_taken} />
+            </div>
+
+            <div className="mt-4">
+              <div className="mb-1.5 flex items-center justify-between">
+                <SectionLabel>Dice history</SectionLabel>
+                <span className="text-xs text-muted-foreground tabular-nums">{stats.dice_rolls} rolls</span>
+              </div>
+              {stats.dice_rolls === 0 ? (
+                <div className="rounded-xl bg-secondary/60 px-3 py-4 text-center text-xs text-muted-foreground">
+                  No rolls yet.
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {[1, 2, 3, 4, 5, 6].map((f) => {
+                    const n = stats.dice[String(f)] ?? 0;
+                    return (
+                      <div key={f} className="flex items-center gap-2">
+                        <span className="w-5 text-center text-base leading-none">{DIE_PIP[f]}</span>
+                        <div className="h-3 flex-1 overflow-hidden rounded-full bg-secondary">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all"
+                            style={{ width: `${(n / maxCount) * 100}%` }}
+                          />
+                        </div>
+                        <span className="w-8 text-right text-xs font-bold tabular-nums text-muted-foreground">{n}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <Button className="mt-5 w-full" variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProfileStat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-2xl bg-secondary/60 py-2.5">
+      <div className="text-lg font-extrabold tabular-nums">{value}</div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+    </div>
   );
 }
 
@@ -1719,6 +1832,87 @@ function BottomNav({ view, onChange }: { view: Tab; onChange: (v: Tab) => void }
         );
       })}
     </nav>
+  );
+}
+
+/* --------------------------------------------------------------- scoreboard */
+
+function Scoreboard({ meId }: { meId: number }) {
+  const [rows, setRows] = useState<PlayerStats[] | null>(null);
+  const [err, setErr] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .scoreboard(100)
+      .then((r) => live && setRows(r))
+      .catch(() => live && setErr(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  return (
+    <Shell className="pb-28">
+      <div className="flex items-center gap-2 pt-1">
+        <Trophy className="size-6 text-primary" />
+        <h1 className="text-xl font-extrabold">Scoreboard</h1>
+      </div>
+      <p className="-mt-2 text-xs text-muted-foreground">Ranked by average dice roll.</p>
+
+      {err && <Card className="text-center text-sm text-muted-foreground">Couldn&apos;t load the scoreboard.</Card>}
+      {!err && !rows && <Card className="text-center text-sm text-muted-foreground">Loading…</Card>}
+      {rows && rows.length === 0 && (
+        <Card className="text-center text-sm text-muted-foreground">
+          No rolls yet — play a game to get on the board.
+        </Card>
+      )}
+
+      {rows && rows.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          {rows.map((r, i) => {
+            const mine = r.id === meId;
+            const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
+            return (
+              <button
+                key={r.id}
+                onClick={() => {
+                  haptic("light");
+                  setOpenId(r.id);
+                }}
+                className={cn(
+                  "flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left ring-1 transition-colors",
+                  mine ? "bg-primary/15 ring-primary/40" : "bg-card ring-white/10"
+                )}
+              >
+                <span className="w-6 shrink-0 text-center text-sm font-bold tabular-nums text-muted-foreground">
+                  {medal ?? i + 1}
+                </span>
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-secondary text-sm font-extrabold">
+                  {(r.first_name || "P").charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-bold">
+                    {r.first_name}
+                    {mine && <span className="ml-1 text-xs font-normal text-primary">you</span>}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground tabular-nums">
+                    {r.dice_rolls} rolls · {r.captures_dealt} knocks
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-lg font-extrabold tabular-nums text-primary">{r.dice_avg.toFixed(2)}</div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">avg</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {openId != null && <ProfileSheet userId={openId} onClose={() => setOpenId(null)} />}
+    </Shell>
   );
 }
 

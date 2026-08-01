@@ -205,7 +205,11 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
         player.finished_at = state.turn
         state.ranking.append(state.current)
 
-    extra_turn = _six_pays_extra(state) or bool(move.captures) or reached_home
+    # A six pays its one bonus. Capture / reaching home also grant a bonus — but NOT on a
+    # second consecutive six: two sixes in a row always end the turn, no matter what the
+    # move did. (consecutive_sixes is only >0 when this very roll was a six.)
+    bonus_move = state.consecutive_sixes < 2 and (bool(move.captures) or reached_home)
+    extra_turn = _six_pays_extra(state) or bonus_move
     _end_turn(state, extra_turn=extra_turn)
 
     return ApplyResult(

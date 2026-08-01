@@ -108,6 +108,40 @@ class AdminStats(BaseModel):
     matches_abandoned: int
 
 
+# --- public profiles & scoreboard -------------------------------------------
+class PlayerStats(BaseModel):
+    """A player's public record — dice luck + combat. NEVER carries telegram_id."""
+
+    id: int
+    first_name: str
+    level: int
+    games_played: int
+    games_won: int
+    dice: dict[str, int]        # {"1": n, ..., "6": n}
+    dice_rolls: int             # total dice ever rolled
+    dice_avg: float             # average face value (0 if never rolled)
+    captures_dealt: int         # times this player knocked someone home
+    captures_taken: int         # times this player was knocked home
+
+    @classmethod
+    def from_user(cls, u) -> "PlayerStats":
+        hist = {str(f): int((u.dice_hist or {}).get(str(f), 0)) for f in range(1, 7)}
+        rolls = sum(hist.values())
+        total = sum(f * n for f, n in ((int(k), v) for k, v in hist.items()))
+        return cls(
+            id=u.id,
+            first_name=u.first_name or "Player",
+            level=u.level,
+            games_played=u.games_played,
+            games_won=u.games_won,
+            dice=hist,
+            dice_rolls=rolls,
+            dice_avg=round(total / rolls, 2) if rolls else 0.0,
+            captures_dealt=u.captures_dealt or 0,
+            captures_taken=u.captures_taken or 0,
+        )
+
+
 # --- matches ----------------------------------------------------------------
 class CreateMatchRequest(BaseModel):
     max_players: int = 4          # 2..4

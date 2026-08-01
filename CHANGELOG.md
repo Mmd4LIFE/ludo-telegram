@@ -3,6 +3,16 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.4.2 — Scoreboard & player cards
+- New Scoreboard (the Ranks tab): every player ranked by their average dice roll, with
+  their roll count and knocks.
+- Tap a player's name on the board to open their card — their dice history, average,
+  wins, and how often they've knocked others home (or been knocked home themselves).
+- Your dice luck and knocks are now tracked and saved as you play.
+- Chat history is now saved, so it sticks around between visits.
+- A six really does pay just once now: roll a six twice in a row and the turn always
+  moves on — even if that second six lands a knock or sends a piece home.
+
 ## 0.4.1 — Replies & admin data
 - Reply to a message in chat — tap it and choose reply, alongside edit and delete.
 - Admins get a Data tab to browse the app's tables and their rows.

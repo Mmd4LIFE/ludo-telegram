@@ -139,6 +139,19 @@ export interface DiceState {
   ranking: DiceEntry[];
 }
 
+export interface PlayerStats {
+  id: number;
+  first_name: string;
+  level: number;
+  games_played: number;
+  games_won: number;
+  dice: Record<string, number>; // {"1": n, ..., "6": n}
+  dice_rolls: number;
+  dice_avg: number;
+  captures_dealt: number;
+  captures_taken: number;
+}
+
 // Authenticate via Telegram initData; falls back to dev login in a plain browser.
 export async function authenticate(): Promise<Profile> {
   const initData = getInitData();
@@ -186,6 +199,8 @@ export const api = {
   getDice: (code: string) => req<DiceState>("GET", `/api/matches/${code}/dice`),
   rollDice: (code: string) => req<DiceState>("POST", `/api/matches/${code}/dice`),
   getChat: (code: string) => req<ChatMessage[]>("GET", `/api/matches/${code}/chat`),
+  scoreboard: (limit = 50) => req<PlayerStats[]>("GET", `/api/scoreboard?limit=${limit}`),
+  userProfile: (id: number) => req<PlayerStats>("GET", `/api/users/${id}/profile`),
   adminStats: () => req<AdminStats>("GET", "/api/admin/stats"),
   adminUsers: (q?: string) =>
     req<AdminUser[]>("GET", `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),

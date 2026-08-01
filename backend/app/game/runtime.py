@@ -88,6 +88,13 @@ class MatchRuntime:
         # user_ids who requested a rematch after the game finished
         self.rematch: set[int] = set()
 
+        # per-game stat accumulators, flushed to the users' lifetime totals when the game
+        # ends (settle or abandon). Keyed by user_id; only HUMAN seats are counted.
+        self.stat_dice: dict[int, dict[int, int]] = {}   # uid -> {face: count}
+        self.stat_dealt: dict[int, int] = {}             # uid -> captures they dealt
+        self.stat_taken: dict[int, int] = {}             # uid -> captures they suffered
+        self._stats_flushed = False
+
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
         if self._started:
@@ -113,6 +120,12 @@ class MatchRuntime:
 
     def _is_bot_seat(self, seat: int) -> bool:
         return self.seat_is_bot.get(seat, True) or self.seat_user.get(seat) is None
+
+    def _human_uid(self, seat: int) -> int | None:
+        """The user_id at ``seat`` if it's a real human (not a house bot), else None."""
+        if self.seat_is_bot.get(seat):
+            return None
+        return self.seat_user.get(seat)
 
     def _human_watching(self) -> bool:
         return hub.has_viewers(self.code)
@@ -185,6 +198,10 @@ class MatchRuntime:
             register_roll(self.state, roll_die(self._rng))
             if self.state.die is not None:
                 self.seat_last_die[seat] = self.state.die
+                uid = self._human_uid(seat)
+                if uid is not None:
+                    hist = self.stat_dice.setdefault(uid, {})
+                    hist[self.state.die] = hist.get(self.state.die, 0) + 1
             await self._broadcast()
             await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)  # hold on the die face
             return
@@ -211,7 +228,15 @@ class MatchRuntime:
                 await self._think()
             if chosen is None:
                 chosen = choose_move(self.state, moves, self._rng)
-            apply_move(self.state, chosen)
+            res = apply_move(self.state, chosen)
+            if res.captured:
+                mover = self._human_uid(seat)
+                if mover is not None:
+                    self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + len(res.captured)
+                for cseat, _tok in res.captured:
+                    victim = self._human_uid(cseat)
+                    if victim is not None:
+                        self.stat_taken[victim] = self.stat_taken.get(victim, 0) + 1
             await self._broadcast()
             await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
@@ -276,8 +301,34 @@ class MatchRuntime:
             m = await session.get(Match, self.match_id)
             if m is not None and m.status is not MatchStatus.FINISHED:
                 m.status = MatchStatus.ABANDONED
-                await session.commit()
+            await self._flush_stats(session)
+            await session.commit()
         logger.info("match %s abandoned (no viewers)", self.code)
+
+    async def _flush_stats(self, session) -> None:
+        """Fold this game's accumulated dice + capture counts into each human's lifetime
+        totals. Idempotent per runtime: guarded so settle/abandon can't double-count.
+
+        ``dice_hist`` is JSONB keyed by the string faces "1".."6"; we reassign the dict so
+        SQLAlchemy detects the change (in-place JSONB mutation isn't tracked).
+        """
+        if self._stats_flushed:
+            return
+        self._stats_flushed = True
+        from app.models import User
+
+        uids = set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
+        for uid in uids:
+            user = await session.get(User, uid)
+            if user is None:
+                continue
+            hist = dict(user.dice_hist or {})
+            for face, n in self.stat_dice.get(uid, {}).items():
+                key = str(face)
+                hist[key] = int(hist.get(key, 0)) + n
+            user.dice_hist = hist
+            user.captures_dealt = (user.captures_dealt or 0) + self.stat_dealt.get(uid, 0)
+            user.captures_taken = (user.captures_taken or 0) + self.stat_taken.get(uid, 0)
 
     async def _settle(self) -> None:
         """Write final placements, pay the pot to the winner, bump stats."""
@@ -308,5 +359,6 @@ class MatchRuntime:
                     user.xp += 100
                 else:
                     user.xp += 25
+            await self._flush_stats(session)
             await session.commit()
         logger.info("match %s finished, ranking=%s", self.code, self.state.ranking)
