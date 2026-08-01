@@ -1545,79 +1545,81 @@ function GameScoreboard({
       gone: removed.has(seat),
       hist,
       rolls,
+      sum,
       avg: rolls ? sum / rolls : 0,
       dealt: stats.dealt[String(seat)] ?? 0,
       taken: stats.taken[String(seat)] ?? 0,
     };
   });
-  rows.sort((a, b) => b.avg - a.avg || b.rolls - a.rolls);
+  rows.sort((a, b) => b.sum - a.sum || b.rolls - a.rolls);
   const maxCount = Math.max(1, ...rows.flatMap((r) => [1, 2, 3, 4, 5, 6].map((f) => r.hist[String(f)] ?? 0)));
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="lb-pop max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-card p-5 pb-8 ring-1 ring-white/10"
+        className="lb-pop max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-card p-4 pb-6 ring-1 ring-white/10"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20" />
-        <div className="mb-1 flex items-center gap-2">
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20" />
+        <div className="mb-0.5 flex items-center gap-2">
           <Trophy className="size-5 text-primary" />
           <h2 className="text-lg font-extrabold">This game</h2>
         </div>
-        <p className="mb-4 text-xs text-muted-foreground">Players ranked by average dice roll.</p>
+        <p className="mb-3 text-xs text-muted-foreground">Players ranked by total of their rolls.</p>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
           {rows.map((r, i) => (
             <div
               key={r.seat}
               className={cn(
-                "rounded-2xl p-3 ring-1",
+                "rounded-xl px-2.5 py-2 ring-1",
                 r.seat === mySeat ? "bg-primary/10 ring-primary/40" : "bg-secondary/50 ring-white/10",
                 r.gone && "opacity-50"
               )}
             >
-              <div className="flex items-center gap-2.5">
-                <span className="w-5 text-center text-sm font-bold tabular-nums text-muted-foreground">{i + 1}</span>
-                <span className="size-3 shrink-0 rounded-full" style={{ background: COLOR_HEX[r.color] }} />
+              <div className="flex items-center gap-2">
+                <span className="w-4 text-center text-sm font-bold tabular-nums text-muted-foreground">{i + 1}</span>
+                <span className="size-2.5 shrink-0 rounded-full" style={{ background: COLOR_HEX[r.color] }} />
                 <span className="min-w-0 flex-1 truncate text-sm font-bold">
                   {r.name}
                   {r.seat === mySeat && <span className="ml-1 text-xs font-normal text-primary">you</span>}
                   {r.gone && <span className="ml-1 text-xs font-normal text-muted-foreground">left</span>}
                 </span>
-                <span className="shrink-0 text-right">
-                  <span className="text-base font-extrabold tabular-nums text-primary">{r.avg.toFixed(2)}</span>
-                  <span className="ml-1 text-[10px] uppercase text-muted-foreground">avg</span>
+                <span className="shrink-0 text-right leading-none">
+                  <span className="text-base font-extrabold tabular-nums text-primary">{r.sum}</span>
+                  <span className="ml-1 text-[10px] uppercase text-muted-foreground">total</span>
                 </span>
               </div>
 
-              <div className="mt-2 flex items-end gap-1.5">
+              <div className="mt-1.5 flex items-end gap-1">
                 {[1, 2, 3, 4, 5, 6].map((f) => {
                   const n = r.hist[String(f)] ?? 0;
                   return (
-                    <div key={f} className="flex flex-1 flex-col items-center gap-1">
-                      <div className="flex h-10 w-full items-end justify-center rounded bg-black/20">
+                    <div key={f} className="flex flex-1 flex-col items-center">
+                      <div className="flex h-5 w-full items-end justify-center rounded-sm bg-black/20">
                         <div
-                          className="w-full rounded bg-primary/70"
-                          style={{ height: `${(n / maxCount) * 100}%`, minHeight: n ? 3 : 0 }}
+                          className="w-full rounded-sm bg-primary/70"
+                          style={{ height: `${(n / maxCount) * 100}%`, minHeight: n ? 2 : 0 }}
                         />
                       </div>
-                      <span className="text-[9px] leading-none text-muted-foreground">{DIE_PIP[f]}</span>
+                      <span className="mt-0.5 text-[9px] leading-none text-muted-foreground">{f}</span>
                       <span className="text-[10px] font-bold leading-none tabular-nums">{n}</span>
                     </div>
                   );
                 })}
               </div>
 
-              <div className="mt-2 flex gap-4 text-[11px] text-muted-foreground">
+              <div className="mt-1 flex gap-3 text-[10px] text-muted-foreground">
                 <span>{r.rolls} rolls</span>
-                <span>🎯 {r.dealt} knocks</span>
-                <span>💥 {r.taken} knocked</span>
+                <span>avg {r.avg.toFixed(2)}</span>
+                <span>{r.dealt} knocks</span>
+                <span>{r.taken} knocked</span>
               </div>
             </div>
           ))}
         </div>
 
-        <Button className="mt-5 w-full" variant="secondary" onClick={onClose}>
+        <Button className="mt-4 w-full" variant="secondary" onClick={onClose}>
           Close
         </Button>
       </div>
@@ -1626,8 +1628,6 @@ function GameScoreboard({
 }
 
 /* -------------------------------------------------------- player profile */
-
-const DIE_PIP: Record<number, string> = { 1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅" };
 
 function ProfileSheet({ userId, onClose }: { userId: number; onClose: () => void }) {
   const [stats, setStats] = useState<PlayerStats | null>(null);
@@ -1694,7 +1694,7 @@ function ProfileSheet({ userId, onClose }: { userId: number; onClose: () => void
                     const n = stats.dice[String(f)] ?? 0;
                     return (
                       <div key={f} className="flex items-center gap-2">
-                        <span className="w-5 text-center text-base leading-none">{DIE_PIP[f]}</span>
+                        <span className="w-5 text-center text-sm font-bold leading-none text-muted-foreground">{f}</span>
                         <div className="h-3 flex-1 overflow-hidden rounded-full bg-secondary">
                           <div
                             className="h-full rounded-full bg-primary transition-all"
