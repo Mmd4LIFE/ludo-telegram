@@ -1516,6 +1516,20 @@ function LiveMatch({
 
 /* ------------------------------------------------------ in-game scoreboard */
 
+// one distinct colour per die face (1..6), used by both the distribution bar and pips.
+const FACE_COLOR = ["#e5c07b", "#e08c5a", "#d76a6a", "#a878d0", "#5aa0d8", "#5cb87a"];
+
+// Render a die face as pips (dots) instead of a numeral — 1 → •, 2 → ••, … 6 → ⚅.
+function FacePips({ n, color }: { n: number; color: string }) {
+  return (
+    <span className="inline-grid grid-cols-3 gap-[1.5px]" style={{ width: 15 }}>
+      {Array.from({ length: n }).map((_, i) => (
+        <span key={i} className="size-[3px] self-center justify-self-center rounded-full" style={{ background: color }} />
+      ))}
+    </span>
+  );
+}
+
 function GameScoreboard({
   state,
   seatNames,
@@ -1552,7 +1566,6 @@ function GameScoreboard({
     };
   });
   rows.sort((a, b) => b.sum - a.sum || b.rolls - a.rolls);
-  const maxCount = Math.max(1, ...rows.flatMap((r) => [1, 2, 3, 4, 5, 6].map((f) => r.hist[String(f)] ?? 0)));
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
@@ -1591,25 +1604,28 @@ function GameScoreboard({
                 </span>
               </div>
 
-              <div className="mt-1.5 flex items-end gap-1">
+              {/* Distribution as proportions of this player's own rolls — so it reads the
+                  same at 6 rolls or 600, instead of bars that mislead as counts pile up. */}
+              <div className="mt-1.5 flex h-2 w-full gap-px overflow-hidden rounded-full bg-black/25">
+                {[1, 2, 3, 4, 5, 6].map((f) => {
+                  const n = r.hist[String(f)] ?? 0;
+                  if (!n) return null;
+                  return <div key={f} style={{ flexGrow: n, background: FACE_COLOR[f - 1] }} />;
+                })}
+              </div>
+              <div className="mt-1 flex items-center justify-between">
                 {[1, 2, 3, 4, 5, 6].map((f) => {
                   const n = r.hist[String(f)] ?? 0;
                   return (
-                    <div key={f} className="flex flex-1 flex-col items-center">
-                      <div className="flex h-5 w-full items-end justify-center rounded-sm bg-black/20">
-                        <div
-                          className="w-full rounded-sm bg-primary/70"
-                          style={{ height: `${(n / maxCount) * 100}%`, minHeight: n ? 2 : 0 }}
-                        />
-                      </div>
-                      <span className="mt-0.5 text-[9px] leading-none text-muted-foreground">{f}</span>
-                      <span className="text-[10px] font-bold leading-none tabular-nums">{n}</span>
-                    </div>
+                    <span key={f} className="flex items-center gap-1">
+                      <FacePips n={f} color={FACE_COLOR[f - 1]} />
+                      <span className="text-[10px] font-bold tabular-nums text-muted-foreground">{n}</span>
+                    </span>
                   );
                 })}
               </div>
 
-              <div className="mt-1 flex gap-3 text-[10px] text-muted-foreground">
+              <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
                 <span>{r.rolls} rolls</span>
                 <span>avg {r.avg.toFixed(2)}</span>
                 <span>{r.dealt} knocks</span>
@@ -1694,11 +1710,13 @@ function ProfileSheet({ userId, onClose }: { userId: number; onClose: () => void
                     const n = stats.dice[String(f)] ?? 0;
                     return (
                       <div key={f} className="flex items-center gap-2">
-                        <span className="w-5 text-center text-sm font-bold leading-none text-muted-foreground">{f}</span>
+                        <span className="flex w-6 justify-center">
+                          <FacePips n={f} color={FACE_COLOR[f - 1]} />
+                        </span>
                         <div className="h-3 flex-1 overflow-hidden rounded-full bg-secondary">
                           <div
-                            className="h-full rounded-full bg-primary transition-all"
-                            style={{ width: `${(n / maxCount) * 100}%` }}
+                            className="h-full rounded-full transition-all"
+                            style={{ width: `${(n / maxCount) * 100}%`, background: FACE_COLOR[f - 1] }}
                           />
                         </div>
                         <span className="w-8 text-right text-xs font-bold tabular-nums text-muted-foreground">{n}</span>
