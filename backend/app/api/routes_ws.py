@@ -84,7 +84,7 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
         while True:
             data = await websocket.receive_json()
             mtype = data.get("type")
-            if mtype in ("roll", "move", "pick_card"):
+            if mtype in ("roll", "move", "pick_card", "pick_target"):
                 manager.handle_action(match_id, user_id, data)
             elif mtype == "ping":
                 await websocket.send_json({"type": "pong"})

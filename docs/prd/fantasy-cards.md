@@ -2,10 +2,12 @@
 
 Status: **All 17 cards live** (Phases 1–4 shipped) · Owner: game team · Last updated: 2026-08-01
 
-> **Update:** every card's effect is now wired into gameplay. Targeting is **automatic**
-> (e.g. "the leading rival", "your lead token") rather than a manual picker — a manual
-> target-selection UI is the remaining refinement (see §7). Buff durations are tracked on
-> `GameState.effects` and tick down at the start of the owner's turn.
+> **Update:** every card's effect is wired into gameplay, with **manual target selection**
+> for opponent-targeting cards (Freeze, Deep Freeze, Recall, Switcheroo) — the drawer picks
+> which rival from a list; a single valid target auto-resolves, and a timeout falls back to
+> the leading rival. The whole draw is a shared, spectator-visible flow (pick → reveal →
+> target → result) so every player sees the card and who it hit. Cards use SVG icons (no
+> emoji), and a **Cards** tab shows the full catalog. Buffs live on `GameState.effects`.
 
 ## 1. Summary
 

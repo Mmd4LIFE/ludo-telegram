@@ -29,6 +29,24 @@ import {
   Check,
   Reply,
   Database,
+  X,
+  Layers,
+  RotateCw,
+  Star,
+  ShieldCheck,
+  Dices,
+  Snowflake,
+  Lock,
+  ArrowLeftRight,
+  Undo2,
+  Zap,
+  Rocket,
+  Crown,
+  HeartPulse,
+  Ban,
+  Target,
+  Layers3,
+  type LucideIcon,
 } from "lucide-react";
 import {
   api,
@@ -75,7 +93,7 @@ const COLOR_HEX: Record<string, string> = {
 };
 
 type Room = { code: string; host: boolean };
-type Tab = "shop" | "friends" | "home" | "ranks" | "me";
+type Tab = "shop" | "friends" | "home" | "cards" | "me";
 type Clock = { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
 // this game's per-seat scoreboard, streamed on every state update
 type GameStats = {
@@ -343,7 +361,7 @@ function Home() {
       )}
       {view === "shop" && <ComingSoon title="Shop" />}
       {view === "friends" && <ComingSoon title="Friends" />}
-      {view === "ranks" && <ComingSoon title="Ranks" />}
+      {view === "cards" && <CardsGallery />}
       <BottomNav view={view} onChange={setView} />
       {noticeBanner}
     </>
@@ -1511,9 +1529,17 @@ function LiveMatch({
           card={card}
           mine={card.seat === mySeat}
           drawerName={seatNames[String(card.seat)] || "A player"}
+          seatNames={seatNames}
+          seatColor={Object.fromEntries(
+            state.players.map((p, s) => [String(s), COLOR_HEX[p.color] ?? "#8892a6"])
+          )}
           onPick={(i) => {
             haptic("medium");
             sock?.pickCard(i);
+          }}
+          onTarget={(s) => {
+            haptic("medium");
+            sock?.pickTarget(s);
           }}
         />
       )}
@@ -1538,19 +1564,73 @@ function LiveMatch({
 
 /* --------------------------------------------------- fantasy card draw */
 
+// each card renders a crisp SVG icon (no emoji) chosen to match its effect
+const CARD_ICON: Record<string, LucideIcon> = {
+  extra_roll: RotateCw,
+  active_stars: Star,
+  shield_one: Shield,
+  shield_all: ShieldCheck,
+  double_dice: Dices,
+  lock_one: Snowflake,
+  lock_two: Lock,
+  swap: ArrowLeftRight,
+  teleport: Sparkles,
+  recall: Undo2,
+  boost: Zap,
+  summon: Rocket,
+  steal_turn: Crown,
+  second_chance: HeartPulse,
+  toll: Ban,
+  mirror: Copy,
+  jackpot: Coins,
+};
+
+function CardIcon({ id, size = 20, color }: { id: string; size?: number; color?: string }) {
+  const Icon = CARD_ICON[id] ?? Layers;
+  return <Icon size={size} color={color} strokeWidth={2.2} />;
+}
+
+function CardFace({ c, big, highlight }: { c?: CardDef; big?: boolean; highlight?: boolean }) {
+  if (!c) return null;
+  const rc = rarityColor(c.rarity);
+  return (
+    <div
+      className="flex h-full w-full flex-col items-center justify-center gap-1.5 rounded-2xl border-2 bg-card p-2 text-center"
+      style={{ borderColor: rc, boxShadow: highlight ? `0 0 22px ${rc}` : undefined }}
+    >
+      <div
+        className="grid place-items-center rounded-full"
+        style={{ width: big ? 54 : 42, height: big ? 54 : 42, background: rc + "22" }}
+      >
+        <CardIcon id={c.id} size={big ? 28 : 22} color={rc} />
+      </div>
+      <div className={cn("font-extrabold leading-tight", big ? "text-base" : "text-[13px]")}>{c.name}</div>
+      <div className="text-[8px] font-bold uppercase tracking-wide" style={{ color: rc }}>{c.rarity}</div>
+      <div className={cn("leading-tight text-muted-foreground", big ? "text-[11px]" : "text-[9px]")}>{c.description}</div>
+    </div>
+  );
+}
+
 function ChanceBox({
   card,
   mine,
   drawerName,
+  seatNames,
+  seatColor,
   onPick,
+  onTarget,
 }: {
   card: CardDraw;
   mine: boolean;
   drawerName: string;
+  seatNames: Record<string, string>;
+  seatColor: Record<string, string>;
   onPick: (index: number) => void;
+  onTarget: (seat: number) => void;
 }) {
   const [catalog, setCatalog] = useState<Record<string, CardDef>>({});
   const [tapped, setTapped] = useState<number | null>(null);
+  const [targeted, setTargeted] = useState<number | null>(null);
   useEffect(() => {
     api
       .getCards()
@@ -1558,115 +1638,185 @@ function ChanceBox({
       .catch(() => {});
   }, []);
 
-  const revealed = card.stage === "reveal";
+  const stage = card.stage;
   const options = card.options ?? [];
   const pickedIdx = card.picked ?? -1;
-  const pickedCard = revealed && options[pickedIdx] ? catalog[options[pickedIdx]] : null;
+  const pickedCard = options[pickedIdx] ? catalog[options[pickedIdx]] : undefined;
+  const nameOf = (s: number) => seatNames[String(s)] || "Player";
 
-  const title = revealed
-    ? mine
-      ? "You drew"
-      : `${drawerName} drew`
-    : mine
-      ? "You brought a token home!"
-      : `${drawerName} is choosing`;
-  const subtitle = revealed
-    ? pickedCard
-      ? pickedCard.name
-      : "…"
-    : mine
-      ? "Pick a card — your prize"
-      : "A card is being drawn…";
-
-  const tap = (i: number) => {
-    if (!mine || revealed || tapped !== null) return;
+  const tapCard = (i: number) => {
+    if (!mine || stage !== "pick" || tapped !== null) return;
     setTapped(i);
     onPick(i);
   };
+  const tapTarget = (s: number) => {
+    if (!mine || stage !== "target" || targeted !== null) return;
+    setTargeted(s);
+    onTarget(s);
+  };
+
+  let title = "";
+  if (stage === "pick") title = mine ? "Your prize" : `${drawerName} is drawing`;
+  else if (stage === "reveal") title = mine ? "You drew" : `${drawerName} drew`;
+  else if (stage === "target") title = mine ? "Choose a target" : `${drawerName} is aiming`;
+  else title = mine ? "You played" : `${drawerName} played`;
 
   return (
-    <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/70 px-6 backdrop-blur-md">
+    <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/75 px-6 backdrop-blur-md">
       <div className="mb-1 text-center text-xs font-bold uppercase tracking-widest text-primary">{title}</div>
-      <div className="mb-5 text-center text-2xl font-extrabold text-white">{subtitle}</div>
-
-      <div className="grid w-full max-w-xs grid-cols-2 gap-3">
-        {[0, 1, 2, 3].map((i) => {
-          const c = revealed ? catalog[options[i]] : null;
-          const isPicked = revealed && i === pickedIdx;
-          const flipped = revealed;
-          return (
-            <button
-              key={i}
-              onClick={() => tap(i)}
-              disabled={!mine || revealed}
-              className={cn(
-                "transition-transform",
-                !revealed && mine && tapped === null && "active:scale-95",
-                revealed && !isPicked && "opacity-40",
-                tapped === i && !revealed && "scale-105"
-              )}
-              style={{ perspective: 800 }}
-            >
-              <div
-                style={{
-                  position: "relative",
-                  aspectRatio: "3 / 4",
-                  transformStyle: "preserve-3d",
-                  transition: "transform 0.5s",
-                  transform: flipped ? "rotateY(180deg)" : "none",
-                }}
-              >
-                {/* back */}
-                <div
-                  style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}
-                  className="grid place-items-center rounded-2xl border-2 border-white/15 bg-gradient-to-br from-primary/40 to-secondary shadow-lg"
-                >
-                  <span className="text-4xl font-black text-white/70">?</span>
-                </div>
-                {/* front */}
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    backfaceVisibility: "hidden",
-                    transform: "rotateY(180deg)",
-                    borderColor: c ? rarityColor(c.rarity) : "#333",
-                    boxShadow: isPicked && c ? `0 0 18px ${rarityColor(c.rarity)}` : undefined,
-                  }}
-                  className="flex flex-col items-center justify-center gap-1 rounded-2xl border-2 bg-card p-2 text-center"
-                >
-                  {c && (
-                    <>
-                      <span className="text-3xl leading-none">{c.icon}</span>
-                      <span className="text-[13px] font-extrabold leading-tight">{c.name}</span>
-                      <span
-                        className="text-[8px] font-bold uppercase tracking-wide"
-                        style={{ color: rarityColor(c.rarity) }}
-                      >
-                        {c.rarity}
-                      </span>
-                      <span className="text-[9px] leading-tight text-muted-foreground">{c.description}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-            </button>
-          );
-        })}
+      <div className="mb-5 text-center text-2xl font-extrabold text-white">
+        {stage === "pick"
+          ? mine
+            ? "Pick a card"
+            : "Drawing a card…"
+          : pickedCard?.name ?? "…"}
       </div>
 
-      {revealed && pickedCard && (
-        <div className="mt-5 max-w-xs text-center">
-          <p className="text-sm text-white/90">{pickedCard.description}</p>
-          {pickedCard.status !== "live" && (
-            <p className="mt-1 text-[11px] text-muted-foreground">✨ Coming soon — effect not active yet.</p>
+      {/* pick / reveal: the four-card fan (flips on reveal) */}
+      {(stage === "pick" || stage === "reveal") && (
+        <div className="grid w-full max-w-xs grid-cols-2 gap-3">
+          {[0, 1, 2, 3].map((i) => {
+            const c = stage === "reveal" ? catalog[options[i]] : undefined;
+            const isPicked = stage === "reveal" && i === pickedIdx;
+            const flipped = stage === "reveal";
+            return (
+              <button
+                key={i}
+                onClick={() => tapCard(i)}
+                disabled={!mine || stage !== "pick"}
+                className={cn(
+                  "transition-transform",
+                  stage === "pick" && mine && tapped === null && "active:scale-95",
+                  flipped && !isPicked && "opacity-40",
+                  tapped === i && stage === "pick" && "scale-105"
+                )}
+                style={{ perspective: 800 }}
+              >
+                <div
+                  style={{
+                    position: "relative",
+                    aspectRatio: "3 / 4",
+                    transformStyle: "preserve-3d",
+                    transition: "transform 0.5s",
+                    transform: flipped ? "rotateY(180deg)" : "none",
+                  }}
+                >
+                  <div
+                    style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}
+                    className="grid place-items-center rounded-2xl border-2 border-white/15 bg-gradient-to-br from-primary/40 to-secondary shadow-lg"
+                  >
+                    <Sparkles className="size-8 text-white/70" />
+                  </div>
+                  <div
+                    style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
+                  >
+                    <CardFace c={c} highlight={isPicked} />
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* target / result: the picked card, plus the target picker or the outcome */}
+      {(stage === "target" || stage === "result") && (
+        <div className="flex w-full max-w-xs flex-col items-center gap-4">
+          <div className="w-32" style={{ aspectRatio: "3 / 4" }}>
+            <CardFace c={pickedCard} big highlight />
+          </div>
+
+          {stage === "target" && (
+            <div className="w-full">
+              <p className="mb-2 text-center text-xs text-muted-foreground">
+                {mine ? "Tap a player to hit" : "Choosing who to hit…"}
+              </p>
+              <div className="flex flex-col gap-2">
+                {(card.targets ?? []).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => tapTarget(s)}
+                    disabled={!mine || targeted !== null}
+                    className={cn(
+                      "flex items-center gap-3 rounded-2xl bg-card px-4 py-3 ring-1 transition active:scale-95",
+                      targeted === s ? "ring-primary" : "ring-white/10"
+                    )}
+                  >
+                    <span className="size-4 shrink-0 rounded-full" style={{ background: seatColor[String(s)] ?? "#8892a6" }} />
+                    <span className="flex-1 text-left font-bold text-white">{nameOf(s)}</span>
+                    <Target className="size-4 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {stage === "result" && (
+            <div className="text-center">
+              {card.target != null ? (
+                <div className="flex items-center justify-center gap-2 text-lg font-extrabold text-white">
+                  <span className="size-3 rounded-full" style={{ background: seatColor[String(card.target)] ?? "#8892a6" }} />
+                  {nameOf(card.target)}
+                </div>
+              ) : (
+                <p className="text-sm text-white/90">{pickedCard?.description}</p>
+              )}
+            </div>
           )}
         </div>
       )}
-      {!revealed && mine && (
-        <p className="mt-5 text-xs text-muted-foreground">Tap a card to reveal your fate</p>
-      )}
     </div>
+  );
+}
+
+/* ----------------------------------------------------- cards gallery */
+
+function CardsGallery() {
+  const [cards, setCards] = useState<CardDef[] | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    api.getCards().then(setCards).catch(() => setErr(true));
+  }, []);
+
+  return (
+    <Shell className="pb-28">
+      <div className="flex items-center gap-2 pt-1">
+        <Layers3 className="size-6 text-primary" />
+        <h1 className="text-xl font-extrabold">Fantasy Cards</h1>
+      </div>
+      <p className="-mt-2 text-xs text-muted-foreground">
+        Bring a token home to draw one of four. Here&apos;s every card and what it does.
+      </p>
+
+      {err && <Card className="text-center text-sm text-muted-foreground">Couldn&apos;t load cards.</Card>}
+      {!cards && !err && <Card className="text-center text-sm text-muted-foreground">Loading…</Card>}
+      {cards && (
+        <div className="flex flex-col gap-2">
+          {cards.map((c) => {
+            const rc = rarityColor(c.rarity);
+            return (
+              <div key={c.id} className="flex items-center gap-3 rounded-2xl bg-card p-3 ring-1 ring-white/10">
+                <div className="grid size-11 shrink-0 place-items-center rounded-xl" style={{ background: rc + "22" }}>
+                  <CardIcon id={c.id} size={22} color={rc} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold">{c.name}</span>
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
+                      style={{ color: rc, background: rc + "22" }}
+                    >
+                      {c.rarity}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">{c.description}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Shell>
   );
 }
 
@@ -1852,7 +2002,7 @@ function GameScoreboard({
               {detailList.map((k) => (
                 <div key={k.id} className="flex items-center gap-2 rounded-xl bg-secondary/60 px-3 py-2 text-sm">
                   <span className={cn("shrink-0", detail.taken ? "text-primary" : "text-[#e0a44a]")}>
-                    {detail.taken ? "✓" : "✗"}
+                    {detail.taken ? <Check className="size-4" /> : <X className="size-4" />}
                   </span>
                   <span className="flex-1 truncate font-semibold">{k.victim_name}</span>
                   <span className="text-[10px] text-muted-foreground">turn {k.turn}</span>
@@ -2518,7 +2668,7 @@ const TABS: { view: Tab; label: string; icon: React.ElementType }[] = [
   { view: "shop", label: "Shop", icon: ShoppingBag },
   { view: "friends", label: "Friends", icon: Users },
   { view: "home", label: "Play", icon: Gamepad2 },
-  { view: "ranks", label: "Ranks", icon: Trophy },
+  { view: "cards", label: "Cards", icon: Layers3 },
   { view: "me", label: "Me", icon: User },
 ];
 

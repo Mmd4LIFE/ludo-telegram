@@ -31,9 +31,11 @@ export interface GameState {
 // an in-progress fantasy-card draw (reach-home reward)
 export interface CardDraw {
   seat: number;
-  stage: "pick" | "reveal";
-  options?: string[]; // card ids — present only at the reveal stage
-  picked?: number; // chosen index — present only at the reveal stage
+  stage: "pick" | "reveal" | "target" | "result";
+  options?: string[]; // card ids — present from the reveal stage on
+  picked?: number; // chosen index — present from the reveal stage on
+  targets?: number[]; // seats the drawer may target (stage "target")
+  target?: number | null; // the seat actually hit (stage "result")
 }
 
 export interface LegalMove {
@@ -107,6 +109,9 @@ export class MatchSocket {
   }
   pickCard(index: number): void {
     this.send({ type: "pick_card", index });
+  }
+  pickTarget(seat: number): void {
+    this.send({ type: "pick_target", seat });
   }
 
   close(): void {

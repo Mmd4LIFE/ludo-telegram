@@ -3,6 +3,13 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.5.2 — Cards, polished
+- Cards now use crisp icons instead of emoji, with a professional draw: pick → flip →
+  (choose your target) → see the result — and everyone at the table sees what happened.
+- You now choose your target for cards that hit a rival (Freeze, Recall, Switcheroo…),
+  instead of it being picked for you.
+- New Cards tab (replacing Ranks): browse every card and exactly what it does.
+
 ## 0.5.1 — Every card comes alive
 - All 17 fantasy cards now actually do something: shields, double dice, freezes, warps,
   swaps, recalls, extra turns, a coin jackpot and more.

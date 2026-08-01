@@ -332,22 +332,84 @@ class MatchRuntime:
             idx = self._rng.randint(0, 3)
         idx = max(0, min(3, idx))
         picked = options[idx]
+        effect = effects[picked]
 
-        self._apply_card(seat, effects[picked])
+        # 1) reveal the drawn card to everyone
+        self._card = {"seat": seat, "stage": "reveal", "options": options, "picked": idx}
+        await self._broadcast()
+        await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
+
+        # 2) if the card hits an opponent and there's a choice, let the drawer pick one
+        target: int | None = None
+        targets = self._valid_targets(seat, effect)
+        if targets:
+            if len(targets) == 1:
+                target = targets[0]
+            else:
+                self._card = {
+                    "seat": seat, "stage": "target", "options": options,
+                    "picked": idx, "targets": targets,
+                }
+                self._deadline = time.time() + settings.CARD_PICK_SECONDS
+                await self._broadcast()
+                got = await self._drain_for(seat, "pick_target", settings.CARD_PICK_SECONDS)
+                self._deadline = None
+                chosen = None
+                if got is not None:
+                    try:
+                        chosen = int(got.get("seat"))
+                    except (TypeError, ValueError):
+                        chosen = None
+                target = chosen if chosen in targets else self._leading_among(seat, targets)
+
+        # 3) apply the effect (to the chosen/auto target) and log the draw
+        affected = self._apply_card(seat, effect, target)
         self.buf_cards.append({
             "match_id": self.match_id, "user_id": uid, "seat": seat,
             "options": options, "picked": picked, "turn": turn_no,
         })
-        self._card = {"seat": seat, "stage": "reveal", "options": options, "picked": idx}
+
+        # 4) show the resolved result (who was hit) to everyone
+        self._card = {
+            "seat": seat, "stage": "result", "options": options,
+            "picked": idx, "target": affected,
+        }
         await self._broadcast()
         await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
         self._card = None
         await self._broadcast()
 
+    # cards whose effect lands on a chosen opponent
+    _TARGETING = frozenset({"lock", "lock2", "recall", "swap"})
+
+    def _valid_targets(self, seat: int, effect: str) -> list[int] | None:
+        """Seats a targeting card may hit, or None if the card isn't targeted. [] means
+        targeted but nobody's eligible (the effect will simply no-op)."""
+        if effect == "mirror":
+            mirrored = next((e for s, e in reversed(self._recent_cards) if s != seat), None)
+            return self._valid_targets(seat, mirrored) if mirrored else None
+        if effect not in self._TARGETING:
+            return None
+        opps = [s for s, p in enumerate(self.state.players) if s != seat and not p.all_home()]
+        if effect in ("recall", "swap"):
+            opps = [s for s in opps if self._ring_tokens(s)]
+            if effect == "swap" and not self._ring_tokens(seat):
+                return []
+        return opps
+
+    def _leading_among(self, seat: int, targets: list[int]) -> int | None:
+        best, score = None, -1
+        for s in targets:
+            tot = sum(t for t in self.state.players[s].tokens if t >= 0)
+            if tot > score:
+                best, score = s, tot
+        return best
+
     # ---- fantasy-card effects --------------------------------------------
-    def _apply_card(self, seat: int, effect: str) -> None:
-        """Apply a drawn card's effect, auto-selecting sensible targets. Every effect is
-        wired (see docs/prd/fantasy-cards.md); Mirror re-applies an opponent's last card."""
+    def _apply_card(self, seat: int, effect: str, target: int | None = None) -> int | None:
+        """Apply a drawn card's effect. ``target`` is the opponent seat the drawer chose
+        (or None → auto). Returns the seat actually affected (for the result banner), or
+        None for a self-only card. Every effect is wired; Mirror replays an opponent's."""
         if effect != "mirror":
             self._recent_cards.append((seat, effect))
         st = self.state
@@ -368,10 +430,6 @@ class MatchRuntime:
             st.set_eff("second_chance", seat, 1)
         elif effect == "toll":
             st.set_eff("toll", seat, 2)                   # your star blocks rivals ~1 round
-        elif effect == "lock":
-            self._freeze_leading_rival(seat, 1)
-        elif effect == "lock2":
-            self._freeze_leading_rival(seat, 2)
         elif effect == "steal_turn":
             self._grant_turn(seat)                        # jump the queue: take a turn now
         elif effect == "boost":
@@ -380,20 +438,32 @@ class MatchRuntime:
             self._release_from_base(seat)
         elif effect == "teleport":
             self._warp_to_next_star(seat)
-        elif effect == "recall":
-            self._recall_leading_rival(seat, 4)
-        elif effect == "swap":
-            self._swap_with_leading_rival(seat)
         elif effect == "coins":
             uid = self._human_uid(seat)
             if uid is not None:
                 self.stat_coins[uid] = self.stat_coins.get(uid, 0) + 150
+        elif effect in ("lock", "lock2"):
+            tgt = target if target is not None else self._leading_rival(seat)
+            if tgt is not None:
+                st.add_eff("skip", tgt, 1 if effect == "lock" else 2)
+            return tgt
+        elif effect == "recall":
+            tgt = target if target is not None else self._leading_rival(seat)
+            if tgt is not None:
+                self._recall_seat(tgt, 4)
+            return tgt
+        elif effect == "swap":
+            tgt = target if target is not None else self._leading_rival(seat)
+            if tgt is not None:
+                self._swap_seats(seat, tgt)
+            return tgt
         elif effect == "mirror":
             mirrored = next(
                 (eff for s, eff in reversed(self._recent_cards) if s != seat), None
             )
             if mirrored:
-                self._apply_card(seat, mirrored)
+                return self._apply_card(seat, mirrored, target)
+        return None
 
     def _grant_turn(self, seat: int) -> None:
         st = self.state
@@ -470,19 +540,15 @@ class MatchRuntime:
                 self._capture_at(seat, ahead)
                 return
 
-    def _recall_leading_rival(self, seat: int, steps: int) -> None:
-        rival = self._leading_rival(seat)
-        if rival is None:
-            return
+    def _recall_seat(self, rival: int, steps: int) -> None:
+        """Send a rival's lead ring token back ``steps`` (floored at their start)."""
         for i in self._ring_tokens(rival):
             self.state.players[rival].tokens[i] = max(0, self.state.players[rival].tokens[i] - steps)
             return
 
-    def _swap_with_leading_rival(self, seat: int) -> None:
+    def _swap_seats(self, seat: int, rival: int) -> None:
+        """Swap the board positions of the drawer's lead ring token and the rival's."""
         from app.ludo.board import START_OFFSET
-        rival = self._leading_rival(seat)
-        if rival is None:
-            return
         mine = self._ring_tokens(seat)
         theirs = self._ring_tokens(rival)
         if not mine or not theirs:
@@ -496,11 +562,6 @@ class MatchRuntime:
         if 0 <= new_mine <= 50 and 0 <= new_rival <= 50:
             self.state.players[seat].tokens[mi] = new_mine
             self.state.players[rival].tokens[ti] = new_rival
-
-    def _freeze_leading_rival(self, seat: int, turns: int) -> None:
-        rival = self._leading_rival(seat)
-        if rival is not None:
-            self.state.add_eff("skip", rival, turns)
 
     async def _think(self) -> None:
         await asyncio.sleep(self._rng.uniform(settings.BOT_THINK_MIN, settings.BOT_THINK_MAX))
