@@ -16,8 +16,8 @@ home, whether the same player rolls again) and leaves the state either back at R
 the same player (extra turn) or at ROLL for the next active player.
 
 Extra turn is granted when the die was a 6, or the move captured an opponent, or the move
-sent a token home. Rolling three 6s in a row forfeits the whole turn (handled in
-register_roll, which is why rolling is a state transition and not a bare RNG call).
+sent a token home. Sixes loop with no cap: each six earns another roll, so a streak of
+sixes is a streak of extra turns (no triple-six forfeit).
 """
 from __future__ import annotations
 
@@ -63,9 +63,9 @@ def roll_die(rng: random.Random | None = None) -> int:
 def register_roll(state: GameState, die: int) -> None:
     """Record a die value on the state and count consecutive sixes.
 
-    Mutates ``state`` in place, moving to MOVE with this die. A six grants exactly ONE
-    extra roll: the bonus is not granted again on a second consecutive six (see
-    ``apply_move``), so the six-streak never needs a forfeit — it simply stops paying out.
+    Mutates ``state`` in place, moving to MOVE with this die. ``consecutive_sixes`` is
+    tracked for reference but no longer gates anything: every six grants another roll (see
+    ``apply_move``), so a streak of sixes just keeps paying out.
     """
     if state.phase is not Phase.ROLL:
         raise ValueError(f"cannot roll in phase {state.phase}")
@@ -82,8 +82,9 @@ def register_roll(state: GameState, die: int) -> None:
 
 
 def _six_pays_extra(state: GameState) -> bool:
-    """A six grants a bonus roll only the first time — not on the second in a row."""
-    return state.die == 6 and state.consecutive_sixes < 2
+    """A six ALWAYS grants another roll — consecutive sixes loop with no cap and no
+    forfeit. Roll ten sixes in a row and you move ten times and roll again each time."""
+    return state.die == 6
 
 
 # --- legal moves ------------------------------------------------------------
@@ -183,8 +184,7 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
     if move is None:
         if legal_moves(state):
             raise ValueError("cannot pass: legal moves exist")
-        # A six still earns its one bonus roll even when it cannot be played — you keep
-        # the reward. A second consecutive six pays nothing, so it can't loop forever.
+        # A six still earns another roll even when it cannot be played — you keep the reward.
         extra = _six_pays_extra(state)
         _end_turn(state, extra_turn=extra)
         return ApplyResult(None, [], False, extra, state.phase is Phase.FINISHED)
@@ -205,11 +205,8 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
         player.finished_at = state.turn
         state.ranking.append(state.current)
 
-    # A six pays its one bonus. Capture / reaching home also grant a bonus — but NOT on a
-    # second consecutive six: two sixes in a row always end the turn, no matter what the
-    # move did. (consecutive_sixes is only >0 when this very roll was a six.)
-    bonus_move = state.consecutive_sixes < 2 and (bool(move.captures) or reached_home)
-    extra_turn = _six_pays_extra(state) or bonus_move
+    # Extra turn on a six (always, looping), a capture, or sending a token home.
+    extra_turn = _six_pays_extra(state) or bool(move.captures) or reached_home
     _end_turn(state, extra_turn=extra_turn)
 
     return ApplyResult(

@@ -3,6 +3,12 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.4.5 — Sixes loop
+- Every six earns another roll again — roll ten sixes in a row and you move ten times and
+  keep rolling. No cap, no forfeit. (Reverts the earlier one-six-only rule.)
+- The in-game scoreboard now shows each player's dice as a clean proportion bar with
+  dot-pip faces, instead of count bars that drifted as rolls piled up.
+
 ## 0.4.4 — Admin: reactions & chat viewer
 - Admins can now manage the chat reactions — add or remove emoji, and the set updates for
   everyone instantly.

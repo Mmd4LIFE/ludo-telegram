@@ -74,18 +74,19 @@ def test_extra_turn_on_six() -> None:
     _check("same player still on turn", s.current == 0 and s.phase is Phase.ROLL)
 
 
-def test_second_six_ends_turn() -> None:
-    """A six pays one bonus roll; a second six in a row pays nothing (no loop)."""
+def test_sixes_loop_without_cap() -> None:
+    """Every six grants another roll — a streak of sixes is a streak of extra turns,
+    with no cap and no forfeit."""
     s = initial_state(4)
-    register_roll(s, 6)
-    res1 = apply_move(s, legal_moves(s)[0])      # release token0, extra turn
-    _check("first six grants an extra turn", res1.extra_turn and s.current == 0)
-    register_roll(s, 6)                          # second six in a row
-    _check("second six counted", s.consecutive_sixes == 2)
-    res2 = apply_move(s, legal_moves(s)[0])      # move counts, but no more bonus
-    _check("second six does NOT grant an extra turn", not res2.extra_turn)
-    _check("turn passes to the next player", s.current == 1 and s.phase is Phase.ROLL)
-    _check("six counter reset on turn change", s.consecutive_sixes == 0)
+    for i in range(5):                           # five sixes in a row
+        register_roll(s, 6)
+        res = apply_move(s, legal_moves(s)[0])
+        _check(f"six #{i + 1} grants an extra turn", res.extra_turn)
+        _check(f"still player 0's turn after six #{i + 1}", s.current == 0 and s.phase is Phase.ROLL)
+    # a non-six finally ends the turn
+    register_roll(s, 3)
+    res = apply_move(s, legal_moves(s)[0])
+    _check("a non-six passes the turn", not res.extra_turn and s.current == 1)
 
 
 # --- capture ----------------------------------------------------------------
@@ -205,7 +206,7 @@ def run_all() -> None:
         test_geometry,
         test_release_requires_six,
         test_extra_turn_on_six,
-        test_second_six_ends_turn,
+        test_sixes_loop_without_cap,
         test_capture_sends_home_and_grants_turn,
         test_safe_square_protects_owner_only,
         test_six_with_no_move_keeps_the_turn,
