@@ -39,6 +39,7 @@ export interface StatePayload {
   seat_rolls: Record<string, Record<string, number>>; // this game: seat -> {face: count}
   seat_dealt: Record<string, number>; // this game: seat -> captures dealt
   seat_taken: Record<string, number>; // this game: seat -> captures suffered
+  seat_potential: Record<string, number>; // this game: seat -> captures passed up
   removed_seats: number[];
   legal_moves: LegalMove[];
   deadline: number | null; // unix seconds the current player must act by (or null)

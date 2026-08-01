@@ -162,6 +162,7 @@ class PlayerStats(BaseModel):
     dice_avg: float             # average face value (0 if never rolled)
     captures_dealt: int         # times this player knocked someone home
     captures_taken: int         # times this player was knocked home
+    potential_knocks: int       # captures this player could have made but didn't
 
     @classmethod
     def from_user(cls, u) -> "PlayerStats":
@@ -179,7 +180,32 @@ class PlayerStats(BaseModel):
             dice_avg=round(total / rolls, 2) if rolls else 0.0,
             captures_dealt=u.captures_dealt or 0,
             captures_taken=u.captures_taken or 0,
+            potential_knocks=u.potential_knocks or 0,
         )
+
+
+class KnockEvent(BaseModel):
+    """One knockout from a match: an actual capture (taken=True) or a passed-up one."""
+
+    id: int
+    turn: int
+    taken: bool
+    attacker_user_id: int
+    attacker_seat: int
+    attacker_name: str
+    victim_user_id: int | None = None
+    victim_seat: int
+    victim_name: str
+
+
+class AdminKnockRow(BaseModel):
+    """Per-player knock totals for the admin view."""
+
+    id: int
+    first_name: str
+    knocks: int          # captures_dealt
+    knocked: int         # captures_taken
+    potential: int       # potential_knocks
 
 
 # --- matches ----------------------------------------------------------------

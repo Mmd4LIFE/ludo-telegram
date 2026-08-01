@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_session
 from app.ludo.board import Color
-from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji
+from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, Knockout
 from app.models import ChatMessage as ChatRow
 from datetime import datetime, timezone
 import math
@@ -27,6 +27,7 @@ from app.schemas import (
     DiceState,
     CreateMatchRequest,
     JoinMatchRequest,
+    KnockEvent,
     MatchSummary,
     PendingJoiner,
     ReactRequest,
@@ -414,6 +415,52 @@ async def roll_dice(
     me["last_value"] = value
     me["last_at"] = now
     return _dice_state(match.code)
+
+
+@router.get("/{code}/knocks", response_model=list[KnockEvent])
+async def match_knocks(
+    code: str,
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Every knock and passed-up knock (potential) in this game — visible to anyone in the
+    room. Each carries the attacker and the victim they knocked (or could have)."""
+    match = await _load_room(session, code)
+    rows = (
+        await session.execute(
+            select(Knockout).where(Knockout.match_id == match.id).order_by(Knockout.id)
+        )
+    ).scalars().all()
+    if not rows:
+        return []
+
+    # resolve display names: humans from users, empty seats/bots from the seat list
+    uids = {r.attacker_user_id for r in rows} | {r.victim_user_id for r in rows if r.victim_user_id}
+    names: dict[int, str] = {}
+    if uids:
+        found = (
+            await session.execute(select(User.id, User.first_name).where(User.id.in_(uids)))
+        ).all()
+        names = {rid: (fn or "Player") for rid, fn in found}
+    seat_name = {
+        s.seat_index: ("Bot" if s.is_bot else names.get(s.user_id, "Player"))
+        for s in match.seats
+    }
+
+    def vname(r: Knockout) -> str:
+        if r.victim_user_id is not None:
+            return names.get(r.victim_user_id, "Player")
+        return seat_name.get(r.victim_seat, "Bot")
+
+    return [
+        KnockEvent(
+            id=r.id, turn=r.turn, taken=r.taken,
+            attacker_user_id=r.attacker_user_id, attacker_seat=r.attacker_seat,
+            attacker_name=names.get(r.attacker_user_id, seat_name.get(r.attacker_seat, "Player")),
+            victim_user_id=r.victim_user_id, victim_seat=r.victim_seat, victim_name=vname(r),
+        )
+        for r in rows
+    ]
 
 
 async def _recent_chat(

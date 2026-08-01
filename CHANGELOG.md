@@ -3,6 +3,15 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.4.6 — Knocks & missed knocks
+- The game now tracks not just the opponents you knock home, but the ones you *could* have
+  knocked and didn't — your "could've" count.
+- The in-game scoreboard shows each player's knocks and could'ves; tap either number to see
+  exactly who.
+- A player's card now shows all-time knocks, times knocked, and could'ves.
+- Every roll and every knock is now saved, so these stats are exact and here to stay.
+- Admins get a Knocks tab: knocks, knocked and could'ves for every player.
+
 ## 0.4.5 — Sixes loop
 - Every six earns another roll again — roll ten sixes in a row and you move ten times and
   keep rolling. No cap, no forfeit. (Reverts the earlier one-six-only rule.)

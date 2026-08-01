@@ -191,6 +191,27 @@ export interface PlayerStats {
   dice_avg: number;
   captures_dealt: number;
   captures_taken: number;
+  potential_knocks: number;
+}
+
+export interface KnockEvent {
+  id: number;
+  turn: number;
+  taken: boolean;
+  attacker_user_id: number;
+  attacker_seat: number;
+  attacker_name: string;
+  victim_user_id: number | null;
+  victim_seat: number;
+  victim_name: string;
+}
+
+export interface AdminKnockRow {
+  id: number;
+  first_name: string;
+  knocks: number;
+  knocked: number;
+  potential: number;
 }
 
 // Authenticate via Telegram initData; falls back to dev login in a plain browser.
@@ -243,7 +264,9 @@ export const api = {
   scoreboard: (limit = 50) => req<PlayerStats[]>("GET", `/api/scoreboard?limit=${limit}`),
   userProfile: (id: number) => req<PlayerStats>("GET", `/api/users/${id}/profile`),
   getReactions: () => req<string[]>("GET", "/api/reactions"),
+  matchKnocks: (code: string) => req<KnockEvent[]>("GET", `/api/matches/${code}/knocks`),
   adminStats: () => req<AdminStats>("GET", "/api/admin/stats"),
+  adminKnocks: () => req<AdminKnockRow[]>("GET", "/api/admin/knocks"),
   adminUsers: (q?: string) =>
     req<AdminUser[]>("GET", `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   adminReactions: () => req<AdminReaction[]>("GET", "/api/admin/reactions"),

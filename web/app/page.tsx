@@ -40,6 +40,8 @@ import {
   AdminReaction,
   AdminChatView,
   AdminChatSeat,
+  AdminKnockRow,
+  KnockEvent,
   ChatMessage,
   REACTIONS,
   DiceState,
@@ -79,6 +81,7 @@ type GameStats = {
   rolls: Record<string, Record<string, number>>; // seat -> {face: count}
   dealt: Record<string, number>; // seat -> captures dealt
   taken: Record<string, number>; // seat -> captures suffered
+  potential: Record<string, number>; // seat -> captures passed up
 };
 
 // Catch any render error so a single bad frame can never take down the whole webview
@@ -133,7 +136,7 @@ function Home() {
   const [seatLevels, setSeatLevels] = useState<Record<string, number>>({});
   const [seatSkins, setSeatSkins] = useState<Record<string, string>>({});
   const [seatDice, setSeatDice] = useState<Record<string, number>>({});
-  const [gameStats, setGameStats] = useState<GameStats>({ rolls: {}, dealt: {}, taken: {} });
+  const [gameStats, setGameStats] = useState<GameStats>({ rolls: {}, dealt: {}, taken: {}, potential: {} });
   const [removedSeats, setRemovedSeats] = useState<number[]>([]);
   const [clock, setClock] = useState<Clock | null>(null);
   const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
@@ -165,6 +168,7 @@ function Home() {
           rolls: p.seat_rolls ?? {},
           dealt: p.seat_dealt ?? {},
           taken: p.seat_taken ?? {},
+          potential: p.seat_potential ?? {},
         });
         setRemovedSeats(p.removed_seats ?? []);
         setClock({
@@ -1501,6 +1505,7 @@ function LiveMatch({
       )}
       {showBoard && (
         <GameScoreboard
+          code={code}
           state={state}
           seatNames={seatNames}
           seatUser={seatUser}
@@ -1531,6 +1536,7 @@ function FacePips({ n, color }: { n: number; color: string }) {
 }
 
 function GameScoreboard({
+  code,
   state,
   seatNames,
   seatUser,
@@ -1539,6 +1545,7 @@ function GameScoreboard({
   mySeat,
   onClose,
 }: {
+  code: string;
   state: GameState;
   seatNames: Record<string, string>;
   seatUser: Record<string, number | null>;
@@ -1547,6 +1554,17 @@ function GameScoreboard({
   mySeat: number | null;
   onClose: () => void;
 }) {
+  const [knocks, setKnocks] = useState<KnockEvent[]>([]);
+  // detail list: which player's knocks / could'ves to show
+  const [detail, setDetail] = useState<{ seat: number; taken: boolean; name: string } | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.matchKnocks(code).then((k) => live && setKnocks(k)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [code]);
+
   const removed = new Set(removedSeats);
   const rows = state.players.map((p, seat) => {
     const hist = stats.rolls[String(seat)] ?? {};
@@ -1563,9 +1581,14 @@ function GameScoreboard({
       avg: rolls ? sum / rolls : 0,
       dealt: stats.dealt[String(seat)] ?? 0,
       taken: stats.taken[String(seat)] ?? 0,
+      potential: stats.potential[String(seat)] ?? 0,
     };
   });
   rows.sort((a, b) => b.sum - a.sum || b.rolls - a.rolls);
+
+  const detailList = detail
+    ? knocks.filter((k) => k.attacker_seat === detail.seat && k.taken === detail.taken)
+    : [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
@@ -1625,11 +1648,24 @@ function GameScoreboard({
                 })}
               </div>
 
-              <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
                 <span>{r.rolls} rolls</span>
                 <span>avg {r.avg.toFixed(2)}</span>
-                <span>{r.dealt} knocks</span>
+                <button
+                  disabled={!r.dealt}
+                  onClick={() => setDetail({ seat: r.seat, taken: true, name: r.name })}
+                  className={cn("tabular-nums", r.dealt ? "text-primary underline decoration-dotted underline-offset-2" : "")}
+                >
+                  {r.dealt} knocks
+                </button>
                 <span>{r.taken} knocked</span>
+                <button
+                  disabled={!r.potential}
+                  onClick={() => setDetail({ seat: r.seat, taken: false, name: r.name })}
+                  className={cn("tabular-nums", r.potential ? "text-[#e0a44a] underline decoration-dotted underline-offset-2" : "")}
+                >
+                  {r.potential} could&rsquo;ve
+                </button>
               </div>
             </div>
           ))}
@@ -1639,6 +1675,48 @@ function GameScoreboard({
           Close
         </Button>
       </div>
+
+      {detail && (
+        <div
+          className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 backdrop-blur-sm"
+          onClick={(e) => {
+            e.stopPropagation();
+            setDetail(null);
+          }}
+        >
+          <div
+            className="lb-pop max-h-[70dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-card p-5 pb-8 ring-1 ring-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20" />
+            <h3 className="text-base font-extrabold">
+              {detail.name} — {detail.taken ? "knocks" : "could’ve knocked"}
+            </h3>
+            <p className="mb-3 text-xs text-muted-foreground">
+              {detail.taken
+                ? "Opponents this player knocked home."
+                : "Captures that were legal but not taken."}
+            </p>
+            <div className="flex flex-col gap-1.5">
+              {detailList.map((k) => (
+                <div key={k.id} className="flex items-center gap-2 rounded-xl bg-secondary/60 px-3 py-2 text-sm">
+                  <span className={cn("shrink-0", detail.taken ? "text-primary" : "text-[#e0a44a]")}>
+                    {detail.taken ? "✓" : "✗"}
+                  </span>
+                  <span className="flex-1 truncate font-semibold">{k.victim_name}</span>
+                  <span className="text-[10px] text-muted-foreground">turn {k.turn}</span>
+                </div>
+              ))}
+              {detailList.length === 0 && (
+                <div className="text-xs text-muted-foreground">Nothing here yet.</div>
+              )}
+            </div>
+            <Button className="mt-4 w-full" variant="secondary" onClick={() => setDetail(null)}>
+              Back
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1689,8 +1767,9 @@ function ProfileSheet({ userId, onClose }: { userId: number; onClose: () => void
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+            <div className="mt-4 grid grid-cols-2 gap-2 text-center">
               <ProfileStat label="Avg roll" value={stats.dice_avg ? stats.dice_avg.toFixed(2) : "—"} />
+              <ProfileStat label="Could've" value={stats.potential_knocks} />
               <ProfileStat label="Knocks" value={stats.captures_dealt} />
               <ProfileStat label="Knocked" value={stats.captures_taken} />
             </div>
@@ -1748,12 +1827,13 @@ function ProfileStat({ label, value }: { label: string; value: number | string }
 
 /* ---------------------------------------------------------------- admin */
 
-const ADMIN_TABS = ["overview", "data", "chats", "reactions"] as const;
+const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions"] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
 const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   overview: "Overview",
   data: "Data",
   chats: "Chats",
+  knocks: "Knocks",
   reactions: "Reactions",
 };
 
@@ -1829,6 +1909,7 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
 
       {tab === "data" && <DataBrowser />}
       {tab === "chats" && <ChatBrowser />}
+      {tab === "knocks" && <KnockLeaderboard />}
       {tab === "reactions" && <ReactionManager />}
 
       {tab === "overview" && (
@@ -2017,6 +2098,58 @@ function DataBrowser() {
         </Card>
       )}
     </>
+  );
+}
+
+/* -------------------------------------------------- admin: knocks */
+
+function KnockLeaderboard() {
+  const [rows, setRows] = useState<AdminKnockRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.adminKnocks().then(setRows).catch((e) => setErr(String(e)));
+  }, []);
+
+  return (
+    <Card>
+      <SectionLabel>Knock stats — all players</SectionLabel>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Knocks made, times knocked, and captures passed up (potential).
+      </p>
+      {err && <div className="mt-2 text-xs text-red">{err}</div>}
+      {!rows && !err && <div className="mt-3 text-xs text-muted-foreground">Loading…</div>}
+      {rows && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="text-left text-muted-foreground">
+                <th className="px-1 py-1 font-semibold">Player</th>
+                <th className="px-1 py-1 text-right font-semibold">Knocks</th>
+                <th className="px-1 py-1 text-right font-semibold">Knocked</th>
+                <th className="px-1 py-1 text-right font-semibold">Could&rsquo;ve</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t border-white/5">
+                  <td className="max-w-[120px] truncate px-1 py-1.5 font-semibold">{r.first_name}</td>
+                  <td className="px-1 py-1.5 text-right tabular-nums text-primary">{r.knocks}</td>
+                  <td className="px-1 py-1.5 text-right tabular-nums">{r.knocked}</td>
+                  <td className="px-1 py-1.5 text-right tabular-nums text-[#e0a44a]">{r.potential}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-1 py-3 text-center text-muted-foreground">
+                    No data yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

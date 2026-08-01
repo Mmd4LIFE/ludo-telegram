@@ -44,7 +44,8 @@ from app.ludo import (
 from app.ludo.board import HOME, TOKENS_PER_PLAYER, Color
 from app.ludo.bots import choose_move
 from app.game.connection import hub
-from app.models import Match, MatchStatus
+from app.models import Match, MatchStatus, DiceRoll, Knockout
+from sqlalchemy import insert
 
 logger = logging.getLogger("ludo.runtime")
 
@@ -93,12 +94,18 @@ class MatchRuntime:
         self.stat_dice: dict[int, dict[int, int]] = {}   # uid -> {face: count}
         self.stat_dealt: dict[int, int] = {}             # uid -> captures they dealt
         self.stat_taken: dict[int, int] = {}             # uid -> captures they suffered
+        self.stat_potential: dict[int, int] = {}         # uid -> captures they passed up
 
         # THIS game's running tally, keyed by SEAT (bots included) — never cleared, so it's
         # the source for the in-game scoreboard broadcast to viewers.
         self.game_dice: dict[int, dict[int, int]] = {}   # seat -> {face: count}
         self.game_dealt: dict[int, int] = {}             # seat -> captures dealt
         self.game_taken: dict[int, int] = {}             # seat -> captures suffered
+        self.game_potential: dict[int, int] = {}         # seat -> captures passed up
+
+        # append-only event rows buffered per step, bulk-inserted in _persist (humans only)
+        self.buf_rolls: list[dict] = []
+        self.buf_knocks: list[dict] = []
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -209,6 +216,10 @@ class MatchRuntime:
                 if uid is not None:
                     hist = self.stat_dice.setdefault(uid, {})
                     hist[self.state.die] = hist.get(self.state.die, 0) + 1
+                    self.buf_rolls.append({
+                        "match_id": self.match_id, "user_id": uid, "seat": seat,
+                        "value": self.state.die, "turn": self.state.turn,
+                    })
             await self._broadcast()
             await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)  # hold on the die face
             return
@@ -235,10 +246,15 @@ class MatchRuntime:
                 await self._think()
             if chosen is None:
                 chosen = choose_move(self.state, moves, self._rng)
+            # Every opponent token that COULD be captured on this move (across all legal
+            # moves), captured here before the state advances.
+            targets = {cap for m in moves for cap in m.captures}
+            turn_no = self.state.turn
+            mover = self._human_uid(seat)
             res = apply_move(self.state, chosen)
             if res.captured:
+                # actual knocks
                 self.game_dealt[seat] = self.game_dealt.get(seat, 0) + len(res.captured)
-                mover = self._human_uid(seat)
                 if mover is not None:
                     self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + len(res.captured)
                 for cseat, _tok in res.captured:
@@ -246,6 +262,23 @@ class MatchRuntime:
                     victim = self._human_uid(cseat)
                     if victim is not None:
                         self.stat_taken[victim] = self.stat_taken.get(victim, 0) + 1
+                    if mover is not None:
+                        self.buf_knocks.append({
+                            "match_id": self.match_id, "turn": turn_no,
+                            "attacker_user_id": mover, "attacker_seat": seat,
+                            "victim_user_id": victim, "victim_seat": cseat, "taken": True,
+                        })
+            elif mover is not None and targets:
+                # a capture was legal but the player did something else — potential knocks
+                self.game_potential[seat] = self.game_potential.get(seat, 0) + len(targets)
+                self.stat_potential[mover] = self.stat_potential.get(mover, 0) + len(targets)
+                for vseat, _tok in targets:
+                    self.buf_knocks.append({
+                        "match_id": self.match_id, "turn": turn_no,
+                        "attacker_user_id": mover, "attacker_seat": seat,
+                        "victim_user_id": self._human_uid(vseat), "victim_seat": vseat,
+                        "taken": False,
+                    })
             await self._broadcast()
             await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
@@ -269,6 +302,7 @@ class MatchRuntime:
             },
             "seat_dealt": {str(k): v for k, v in self.game_dealt.items()},
             "seat_taken": {str(k): v for k, v in self.game_taken.items()},
+            "seat_potential": {str(k): v for k, v in self.game_potential.items()},
             "removed_seats": sorted(self.removed_seats),
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
             # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
@@ -288,6 +322,13 @@ class MatchRuntime:
             m.state = self.state.to_dict()
             if self.state.phase is not Phase.FINISHED:
                 m.status = MatchStatus.PLAYING
+            # Bulk-insert the roll/knock events buffered since the last persist (humans only).
+            if self.buf_rolls:
+                await session.execute(insert(DiceRoll), self.buf_rolls)
+                self.buf_rolls = []
+            if self.buf_knocks:
+                await session.execute(insert(Knockout), self.buf_knocks)
+                self.buf_knocks = []
             # Fold any dice/capture deltas accumulated since the last persist into the
             # players' lifetime totals in the SAME commit — this is what makes an in-game
             # profile card reflect the current game's rolls (rather than only updating when
@@ -334,7 +375,10 @@ class MatchRuntime:
         ``dice_hist`` is JSONB keyed by the string faces "1".."6"; we reassign the dict so
         SQLAlchemy detects the change (in-place JSONB mutation isn't tracked).
         """
-        uids = set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
+        uids = (
+            set(self.stat_dice) | set(self.stat_dealt)
+            | set(self.stat_taken) | set(self.stat_potential)
+        )
         if not uids:
             return
         from app.models import User
@@ -350,12 +394,14 @@ class MatchRuntime:
             user.dice_hist = hist
             user.captures_dealt = (user.captures_dealt or 0) + self.stat_dealt.get(uid, 0)
             user.captures_taken = (user.captures_taken or 0) + self.stat_taken.get(uid, 0)
+            user.potential_knocks = (user.potential_knocks or 0) + self.stat_potential.get(uid, 0)
 
         # deltas are now persisted (within this session's pending commit) — reset them so
         # the next flush only applies what's new.
         self.stat_dice = {}
         self.stat_dealt = {}
         self.stat_taken = {}
+        self.stat_potential = {}
 
     async def _settle(self) -> None:
         """Write final placements, pay the pot to the winner, bump stats."""

@@ -22,6 +22,7 @@ from app.schemas import (
     AdminChatEntry,
     AdminChatSeat,
     AdminChatView,
+    AdminKnockRow,
     AdminStats,
     AdminUser,
     ReactionEmojiOut,
@@ -160,6 +161,30 @@ async def remove_reaction(
         await session.delete(row)
         await session.commit()
     return await list_reactions(_admin=_admin, session=session)
+
+
+# --- knock leaderboard ------------------------------------------------------
+@router.get("/knocks", response_model=list[AdminKnockRow])
+async def knock_totals(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """All-time knock stats per player: knocks dealt, knocked, and passed-up (potential)."""
+    rows = (
+        await session.execute(
+            select(User)
+            .where(User.is_bot.is_(False))
+            .order_by(User.captures_dealt.desc(), User.potential_knocks.desc())
+        )
+    ).scalars().all()
+    return [
+        AdminKnockRow(
+            id=u.id, first_name=u.first_name or "Player",
+            knocks=u.captures_dealt or 0, knocked=u.captures_taken or 0,
+            potential=u.potential_knocks or 0,
+        )
+        for u in rows
+    ]
 
 
 # --- per-match chat viewer --------------------------------------------------
