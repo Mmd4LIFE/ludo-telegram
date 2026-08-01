@@ -3,6 +3,14 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.4.3 — In-game scoreboard & reactions
+- Tap **Scores** at the top of a game to see this game's scoreboard: every player ranked
+  by their average roll, with a mini chart of how their dice have fallen and their knocks.
+- React to any chat message — tap it and pick 👍 ❤️ 😂 🔥 (tap again to remove).
+- Deleting a chat message now just hides it; nothing is lost behind the scenes.
+- Player cards now update live while a game is in progress, instead of only at the end.
+- (The global Ranks scoreboard is back to “coming soon” while we build it out.)
+
 ## 0.4.2 — Scoreboard & player cards
 - New Scoreboard (the Ranks tab): every player ranked by their average dice roll, with
   their roll count and knocks.

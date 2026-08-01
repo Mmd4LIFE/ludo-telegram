@@ -38,6 +38,7 @@ import {
   AdminRows,
   AdminUser,
   ChatMessage,
+  REACTIONS,
   DiceState,
   MatchSummary,
   PlayerStats,
@@ -70,6 +71,12 @@ const COLOR_HEX: Record<string, string> = {
 type Room = { code: string; host: boolean };
 type Tab = "shop" | "friends" | "home" | "ranks" | "me";
 type Clock = { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
+// this game's per-seat scoreboard, streamed on every state update
+type GameStats = {
+  rolls: Record<string, Record<string, number>>; // seat -> {face: count}
+  dealt: Record<string, number>; // seat -> captures dealt
+  taken: Record<string, number>; // seat -> captures suffered
+};
 
 // Catch any render error so a single bad frame can never take down the whole webview
 // (which Telegram surfaces as "This page couldn't load").
@@ -123,6 +130,7 @@ function Home() {
   const [seatLevels, setSeatLevels] = useState<Record<string, number>>({});
   const [seatSkins, setSeatSkins] = useState<Record<string, string>>({});
   const [seatDice, setSeatDice] = useState<Record<string, number>>({});
+  const [gameStats, setGameStats] = useState<GameStats>({ rolls: {}, dealt: {}, taken: {} });
   const [removedSeats, setRemovedSeats] = useState<number[]>([]);
   const [clock, setClock] = useState<Clock | null>(null);
   const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
@@ -150,6 +158,11 @@ function Home() {
         setSeatLevels(p.seat_levels ?? {});
         setSeatSkins(p.seat_skins ?? {});
         setSeatDice(p.seat_last_die ?? {});
+        setGameStats({
+          rolls: p.seat_rolls ?? {},
+          dealt: p.seat_dealt ?? {},
+          taken: p.seat_taken ?? {},
+        });
         setRemovedSeats(p.removed_seats ?? []);
         setClock({
           deadline: p.deadline,
@@ -282,6 +295,7 @@ function Home() {
         seatLevels={seatLevels}
         seatSkins={seatSkins}
         seatDice={seatDice}
+        gameStats={gameStats}
         removedSeats={removedSeats}
         clock={clock}
         rematch={rematch}
@@ -318,7 +332,7 @@ function Home() {
       )}
       {view === "shop" && <ComingSoon title="Shop" />}
       {view === "friends" && <ComingSoon title="Friends" />}
-      {view === "ranks" && <Scoreboard meId={profile.id} />}
+      {view === "ranks" && <ComingSoon title="Ranks" />}
       <BottomNav view={view} onChange={setView} />
       {noticeBanner}
     </>
@@ -1012,6 +1026,14 @@ function MatchChat({
       /* ignore */
     }
   };
+  const react = async (id: number, emoji: string) => {
+    haptic("light");
+    try {
+      setChat(await api.reactChat(code, id, emoji));
+    } catch {
+      /* ignore */
+    }
+  };
   const tint = (id: number) =>
     colors[id] ?? COLOR_LIST[((id % COLOR_LIST.length) + COLOR_LIST.length) % COLOR_LIST.length];
   const shadow = "0 1px 3px rgba(0,0,0,0.7)";
@@ -1067,8 +1089,50 @@ function MatchChat({
                   )}
                   <span className="text-[13px] text-white break-words">{m.text}</span>
                   {m.edited && <span className="text-[10px] text-white/50"> (edited)</span>}
+                  {/* reaction pills (always visible when present) */}
+                  {Object.keys(m.reactions).length > 0 && (
+                    <div className={cn("mt-1 flex flex-wrap gap-1", mine && "justify-end")}>
+                      {Object.entries(m.reactions).map(([emoji, count]) => (
+                        <button
+                          key={emoji}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            react(m.id, emoji);
+                          }}
+                          className={cn(
+                            "flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] ring-1 active:scale-90",
+                            m.my_reaction === emoji
+                              ? "bg-primary/25 ring-primary/50"
+                              : "bg-white/10 ring-white/15"
+                          )}
+                          style={{ textShadow: "none" }}
+                        >
+                          <span className="leading-none">{emoji}</span>
+                          <span className="tabular-nums text-white/85">{count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {open && (
-                    <span className="ml-2 inline-flex items-center gap-1 align-middle">
+                    <span className="ml-2 inline-flex flex-wrap items-center gap-1 align-middle">
+                      {REACTIONS.map((emoji) => (
+                        <button
+                          key={emoji}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            react(m.id, emoji);
+                            setMenuId(null);
+                          }}
+                          className={cn(
+                            "grid size-6 place-items-center rounded-full text-sm leading-none active:scale-90",
+                            m.my_reaction === emoji ? "bg-primary/30" : "bg-white/15"
+                          )}
+                          style={{ textShadow: "none" }}
+                          aria-label={`React ${emoji}`}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1257,6 +1321,7 @@ function LiveMatch({
   seatLevels,
   seatSkins,
   seatDice,
+  gameStats,
   removedSeats,
   clock,
   rematch,
@@ -1272,6 +1337,7 @@ function LiveMatch({
   seatLevels: Record<string, number>;
   seatSkins: Record<string, string>;
   seatDice: Record<string, number>;
+  gameStats: GameStats;
   removedSeats: number[];
   clock: Clock | null;
   rematch: { votes: number[]; humanIds: number[] };
@@ -1279,6 +1345,7 @@ function LiveMatch({
   onLeave: () => void;
 }) {
   const [profileId, setProfileId] = useState<number | null>(null);
+  const [showBoard, setShowBoard] = useState(false); // in-game scoreboard sheet
   const mySeat = (() => {
     for (const [seat, uid] of Object.entries(seatUser)) {
       if (uid === profile.id) return Number(seat);
@@ -1302,9 +1369,21 @@ function LiveMatch({
         <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-bold tracking-wider ring-1 ring-white/10">
           ROOM {code}
         </span>
-        <Button variant="ghost" size="sm" onClick={onLeave}>
-          <ArrowLeft className="size-4" /> Leave
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              haptic("light");
+              setShowBoard(true);
+            }}
+          >
+            <Trophy className="size-4" /> Scores
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onLeave}>
+            <ArrowLeft className="size-4" /> Leave
+          </Button>
+        </div>
       </div>
 
       {finished && (
@@ -1412,7 +1491,129 @@ function LiveMatch({
       {profileId != null && (
         <ProfileSheet userId={profileId} onClose={() => setProfileId(null)} />
       )}
+      {showBoard && (
+        <GameScoreboard
+          state={state}
+          seatNames={seatNames}
+          seatUser={seatUser}
+          removedSeats={removedSeats}
+          stats={gameStats}
+          mySeat={mySeat}
+          onClose={() => setShowBoard(false)}
+        />
+      )}
     </main>
+  );
+}
+
+/* ------------------------------------------------------ in-game scoreboard */
+
+function GameScoreboard({
+  state,
+  seatNames,
+  seatUser,
+  removedSeats,
+  stats,
+  mySeat,
+  onClose,
+}: {
+  state: GameState;
+  seatNames: Record<string, string>;
+  seatUser: Record<string, number | null>;
+  removedSeats: number[];
+  stats: GameStats;
+  mySeat: number | null;
+  onClose: () => void;
+}) {
+  const removed = new Set(removedSeats);
+  const rows = state.players.map((p, seat) => {
+    const hist = stats.rolls[String(seat)] ?? {};
+    const rolls = [1, 2, 3, 4, 5, 6].reduce((a, f) => a + (hist[String(f)] ?? 0), 0);
+    const sum = [1, 2, 3, 4, 5, 6].reduce((a, f) => a + f * (hist[String(f)] ?? 0), 0);
+    return {
+      seat,
+      color: p.color,
+      name: seatNames[String(seat)] || (seatUser[String(seat)] ? "Player" : "Bot"),
+      gone: removed.has(seat),
+      hist,
+      rolls,
+      avg: rolls ? sum / rolls : 0,
+      dealt: stats.dealt[String(seat)] ?? 0,
+      taken: stats.taken[String(seat)] ?? 0,
+    };
+  });
+  rows.sort((a, b) => b.avg - a.avg || b.rolls - a.rolls);
+  const maxCount = Math.max(1, ...rows.flatMap((r) => [1, 2, 3, 4, 5, 6].map((f) => r.hist[String(f)] ?? 0)));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="lb-pop max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-card p-5 pb-8 ring-1 ring-white/10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20" />
+        <div className="mb-1 flex items-center gap-2">
+          <Trophy className="size-5 text-primary" />
+          <h2 className="text-lg font-extrabold">This game</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted-foreground">Players ranked by average dice roll.</p>
+
+        <div className="flex flex-col gap-3">
+          {rows.map((r, i) => (
+            <div
+              key={r.seat}
+              className={cn(
+                "rounded-2xl p-3 ring-1",
+                r.seat === mySeat ? "bg-primary/10 ring-primary/40" : "bg-secondary/50 ring-white/10",
+                r.gone && "opacity-50"
+              )}
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="w-5 text-center text-sm font-bold tabular-nums text-muted-foreground">{i + 1}</span>
+                <span className="size-3 shrink-0 rounded-full" style={{ background: COLOR_HEX[r.color] }} />
+                <span className="min-w-0 flex-1 truncate text-sm font-bold">
+                  {r.name}
+                  {r.seat === mySeat && <span className="ml-1 text-xs font-normal text-primary">you</span>}
+                  {r.gone && <span className="ml-1 text-xs font-normal text-muted-foreground">left</span>}
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="text-base font-extrabold tabular-nums text-primary">{r.avg.toFixed(2)}</span>
+                  <span className="ml-1 text-[10px] uppercase text-muted-foreground">avg</span>
+                </span>
+              </div>
+
+              <div className="mt-2 flex items-end gap-1.5">
+                {[1, 2, 3, 4, 5, 6].map((f) => {
+                  const n = r.hist[String(f)] ?? 0;
+                  return (
+                    <div key={f} className="flex flex-1 flex-col items-center gap-1">
+                      <div className="flex h-10 w-full items-end justify-center rounded bg-black/20">
+                        <div
+                          className="w-full rounded bg-primary/70"
+                          style={{ height: `${(n / maxCount) * 100}%`, minHeight: n ? 3 : 0 }}
+                        />
+                      </div>
+                      <span className="text-[9px] leading-none text-muted-foreground">{DIE_PIP[f]}</span>
+                      <span className="text-[10px] font-bold leading-none tabular-nums">{n}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-2 flex gap-4 text-[11px] text-muted-foreground">
+                <span>{r.rolls} rolls</span>
+                <span>🎯 {r.dealt} knocks</span>
+                <span>💥 {r.taken} knocked</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <Button className="mt-5 w-full" variant="secondary" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -1832,87 +2033,6 @@ function BottomNav({ view, onChange }: { view: Tab; onChange: (v: Tab) => void }
         );
       })}
     </nav>
-  );
-}
-
-/* --------------------------------------------------------------- scoreboard */
-
-function Scoreboard({ meId }: { meId: number }) {
-  const [rows, setRows] = useState<PlayerStats[] | null>(null);
-  const [err, setErr] = useState(false);
-  const [openId, setOpenId] = useState<number | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    api
-      .scoreboard(100)
-      .then((r) => live && setRows(r))
-      .catch(() => live && setErr(true));
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  return (
-    <Shell className="pb-28">
-      <div className="flex items-center gap-2 pt-1">
-        <Trophy className="size-6 text-primary" />
-        <h1 className="text-xl font-extrabold">Scoreboard</h1>
-      </div>
-      <p className="-mt-2 text-xs text-muted-foreground">Ranked by average dice roll.</p>
-
-      {err && <Card className="text-center text-sm text-muted-foreground">Couldn&apos;t load the scoreboard.</Card>}
-      {!err && !rows && <Card className="text-center text-sm text-muted-foreground">Loading…</Card>}
-      {rows && rows.length === 0 && (
-        <Card className="text-center text-sm text-muted-foreground">
-          No rolls yet — play a game to get on the board.
-        </Card>
-      )}
-
-      {rows && rows.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          {rows.map((r, i) => {
-            const mine = r.id === meId;
-            const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
-            return (
-              <button
-                key={r.id}
-                onClick={() => {
-                  haptic("light");
-                  setOpenId(r.id);
-                }}
-                className={cn(
-                  "flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left ring-1 transition-colors",
-                  mine ? "bg-primary/15 ring-primary/40" : "bg-card ring-white/10"
-                )}
-              >
-                <span className="w-6 shrink-0 text-center text-sm font-bold tabular-nums text-muted-foreground">
-                  {medal ?? i + 1}
-                </span>
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-secondary text-sm font-extrabold">
-                  {(r.first_name || "P").charAt(0).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-bold">
-                    {r.first_name}
-                    {mine && <span className="ml-1 text-xs font-normal text-primary">you</span>}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground tabular-nums">
-                    {r.dice_rolls} rolls · {r.captures_dealt} knocks
-                  </div>
-                </div>
-                <div className="shrink-0 text-right">
-                  <div className="text-lg font-extrabold tabular-nums text-primary">{r.dice_avg.toFixed(2)}</div>
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">avg</div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {openId != null && <ProfileSheet userId={openId} onClose={() => setOpenId(null)} />}
-    </Shell>
   );
 }
 

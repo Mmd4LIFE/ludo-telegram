@@ -88,12 +88,17 @@ class MatchRuntime:
         # user_ids who requested a rematch after the game finished
         self.rematch: set[int] = set()
 
-        # per-game stat accumulators, flushed to the users' lifetime totals when the game
-        # ends (settle or abandon). Keyed by user_id; only HUMAN seats are counted.
+        # lifetime-stat deltas, flushed to users' totals on every persist (see
+        # _flush_stats). Keyed by user_id; only HUMAN seats are counted.
         self.stat_dice: dict[int, dict[int, int]] = {}   # uid -> {face: count}
         self.stat_dealt: dict[int, int] = {}             # uid -> captures they dealt
         self.stat_taken: dict[int, int] = {}             # uid -> captures they suffered
-        self._stats_flushed = False
+
+        # THIS game's running tally, keyed by SEAT (bots included) — never cleared, so it's
+        # the source for the in-game scoreboard broadcast to viewers.
+        self.game_dice: dict[int, dict[int, int]] = {}   # seat -> {face: count}
+        self.game_dealt: dict[int, int] = {}             # seat -> captures dealt
+        self.game_taken: dict[int, int] = {}             # seat -> captures suffered
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -198,6 +203,8 @@ class MatchRuntime:
             register_roll(self.state, roll_die(self._rng))
             if self.state.die is not None:
                 self.seat_last_die[seat] = self.state.die
+                ghist = self.game_dice.setdefault(seat, {})
+                ghist[self.state.die] = ghist.get(self.state.die, 0) + 1
                 uid = self._human_uid(seat)
                 if uid is not None:
                     hist = self.stat_dice.setdefault(uid, {})
@@ -230,10 +237,12 @@ class MatchRuntime:
                 chosen = choose_move(self.state, moves, self._rng)
             res = apply_move(self.state, chosen)
             if res.captured:
+                self.game_dealt[seat] = self.game_dealt.get(seat, 0) + len(res.captured)
                 mover = self._human_uid(seat)
                 if mover is not None:
                     self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + len(res.captured)
                 for cseat, _tok in res.captured:
+                    self.game_taken[cseat] = self.game_taken.get(cseat, 0) + 1
                     victim = self._human_uid(cseat)
                     if victim is not None:
                         self.stat_taken[victim] = self.stat_taken.get(victim, 0) + 1
@@ -254,6 +263,12 @@ class MatchRuntime:
             "seat_levels": {str(k): v for k, v in self.seat_levels.items()},
             "seat_skins": {str(k): v for k, v in self.seat_skins.items()},
             "seat_last_die": {str(k): v for k, v in self.seat_last_die.items()},
+            # this game's per-seat scoreboard (dice histogram + captures)
+            "seat_rolls": {
+                str(k): {str(f): n for f, n in v.items()} for k, v in self.game_dice.items()
+            },
+            "seat_dealt": {str(k): v for k, v in self.game_dealt.items()},
+            "seat_taken": {str(k): v for k, v in self.game_taken.items()},
             "removed_seats": sorted(self.removed_seats),
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
             # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
@@ -273,6 +288,11 @@ class MatchRuntime:
             m.state = self.state.to_dict()
             if self.state.phase is not Phase.FINISHED:
                 m.status = MatchStatus.PLAYING
+            # Fold any dice/capture deltas accumulated since the last persist into the
+            # players' lifetime totals in the SAME commit — this is what makes an in-game
+            # profile card reflect the current game's rolls (rather than only updating when
+            # the whole game ends). _persist runs after every step, so deltas flush promptly.
+            await self._flush_stats(session)
             await session.commit()
 
     async def _kick(self, seat: int) -> None:
@@ -306,18 +326,19 @@ class MatchRuntime:
         logger.info("match %s abandoned (no viewers)", self.code)
 
     async def _flush_stats(self, session) -> None:
-        """Fold this game's accumulated dice + capture counts into each human's lifetime
-        totals. Idempotent per runtime: guarded so settle/abandon can't double-count.
+        """Fold the dice + capture deltas accumulated SINCE THE LAST FLUSH into each
+        human's lifetime totals, then clear them. Called from _persist after every step
+        (so profiles update live) and once more on abandon; clearing makes it safe to call
+        repeatedly without double-counting.
 
         ``dice_hist`` is JSONB keyed by the string faces "1".."6"; we reassign the dict so
         SQLAlchemy detects the change (in-place JSONB mutation isn't tracked).
         """
-        if self._stats_flushed:
+        uids = set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
+        if not uids:
             return
-        self._stats_flushed = True
         from app.models import User
 
-        uids = set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
         for uid in uids:
             user = await session.get(User, uid)
             if user is None:
@@ -329,6 +350,12 @@ class MatchRuntime:
             user.dice_hist = hist
             user.captures_dealt = (user.captures_dealt or 0) + self.stat_dealt.get(uid, 0)
             user.captures_taken = (user.captures_taken or 0) + self.stat_taken.get(uid, 0)
+
+        # deltas are now persisted (within this session's pending commit) — reset them so
+        # the next flush only applies what's new.
+        self.stat_dice = {}
+        self.stat_dealt = {}
+        self.stat_taken = {}
 
     async def _settle(self) -> None:
         """Write final placements, pay the pot to the winner, bump stats."""
@@ -359,6 +386,7 @@ class MatchRuntime:
                     user.xp += 100
                 else:
                     user.xp += 25
-            await self._flush_stats(session)
+            # dice/capture deltas were already flushed by the final _persist; nothing to
+            # add here beyond the placement/XP bumps above.
             await session.commit()
         logger.info("match %s finished, ranking=%s", self.code, self.state.ranking)

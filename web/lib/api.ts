@@ -107,7 +107,12 @@ export interface ChatMessage {
   reply_to: number | null;
   reply_name: string | null;
   reply_text: string | null;
+  reactions: Record<string, number>; // emoji -> count
+  my_reaction: string | null;
 }
+
+// Keep in step with ALLOWED_REACTIONS on the backend.
+export const REACTIONS = ["👍", "❤️", "😂", "🔥"] as const;
 
 export interface AdminTable {
   name: string;
@@ -213,4 +218,6 @@ export const api = {
     req<ChatMessage[]>("PATCH", `/api/matches/${code}/chat/${id}`, { text }),
   deleteChat: (code: string, id: number) =>
     req<ChatMessage[]>("DELETE", `/api/matches/${code}/chat/${id}`),
+  reactChat: (code: string, id: number, emoji: string) =>
+    req<ChatMessage[]>("POST", `/api/matches/${code}/chat/${id}/react`, { emoji }),
 };

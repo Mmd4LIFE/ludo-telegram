@@ -203,11 +203,17 @@ class ChatMessage(BaseModel):
     reply_to: int | None = None      # id of the message this replies to
     reply_name: str | None = None    # snapshot of who is being replied to
     reply_text: str | None = None    # snapshot of the replied-to text (truncated)
+    reactions: dict[str, int] = {}   # emoji -> count
+    my_reaction: str | None = None   # the viewer's own reaction, if any
 
 
 class SendChatRequest(BaseModel):
     text: str
     reply_to: int | None = None
+
+
+class ReactRequest(BaseModel):
+    emoji: str
 
 
 # --- waiting-room dice game --------------------------------------------------

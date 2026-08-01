@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_session
 from app.ludo.board import Color
-from app.models import Match, MatchSeat, MatchStatus, User
+from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction
 from app.models import ChatMessage as ChatRow
+from datetime import datetime, timezone
 import math
 import random
 import time
@@ -28,6 +29,7 @@ from app.schemas import (
     JoinMatchRequest,
     MatchSummary,
     PendingJoiner,
+    ReactRequest,
     RejectJoinerRequest,
     SeatInfo,
     SetColorRequest,
@@ -37,6 +39,9 @@ from app.schemas import (
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
 _COLORS = [Color.RED, Color.GREEN, Color.YELLOW, Color.BLUE]
+
+# The fixed set of chat reactions (Telegram-style). Keep in step with the Mini App.
+ALLOWED_REACTIONS = ("👍", "❤️", "😂", "🔥")
 
 # How many recent chat messages a room returns (chat is persisted in chat_messages).
 _CHAT_MAX = 60
@@ -404,35 +409,55 @@ async def roll_dice(
     return _dice_state(match.code)
 
 
-def _to_msg(row: ChatRow) -> ChatMessage:
-    return ChatMessage(
-        id=row.id, user_id=row.user_id, name=row.name, text=row.text,
-        edited=row.edited, reply_to=row.reply_to,
-        reply_name=row.reply_name, reply_text=row.reply_text,
-    )
-
-
-async def _recent_chat(session: AsyncSession, match_id: int) -> list[ChatMessage]:
-    """The last _CHAT_MAX messages for a match, oldest → newest."""
+async def _recent_chat(
+    session: AsyncSession, match_id: int, me_id: int
+) -> list[ChatMessage]:
+    """The last _CHAT_MAX non-deleted messages for a match, oldest → newest, each with
+    its aggregated reactions and the viewer's own reaction."""
     rows = (
         await session.execute(
             select(ChatRow)
-            .where(ChatRow.match_id == match_id)
+            .where(ChatRow.match_id == match_id, ChatRow.deleted_at.is_(None))
             .order_by(ChatRow.id.desc())
             .limit(_CHAT_MAX)
         )
     ).scalars().all()
-    return [_to_msg(r) for r in reversed(rows)]
+    rows = list(reversed(rows))
+
+    counts: dict[int, dict[str, int]] = {}
+    mine: dict[int, str] = {}
+    if rows:
+        ids = [r.id for r in rows]
+        reacts = (
+            await session.execute(
+                select(MessageReaction).where(MessageReaction.message_id.in_(ids))
+            )
+        ).scalars().all()
+        for rx in reacts:
+            counts.setdefault(rx.message_id, {})
+            counts[rx.message_id][rx.emoji] = counts[rx.message_id].get(rx.emoji, 0) + 1
+            if rx.user_id == me_id:
+                mine[rx.message_id] = rx.emoji
+
+    return [
+        ChatMessage(
+            id=r.id, user_id=r.user_id, name=r.name, text=r.text,
+            edited=r.edited, reply_to=r.reply_to,
+            reply_name=r.reply_name, reply_text=r.reply_text,
+            reactions=counts.get(r.id, {}), my_reaction=mine.get(r.id),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/{code}/chat", response_model=list[ChatMessage])
 async def get_chat(
     code: str,
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     match = await _load_room(session, code)
-    return await _recent_chat(session, match.id)
+    return await _recent_chat(session, match.id, user.id)
 
 
 @router.post("/{code}/chat", response_model=list[ChatMessage])
@@ -473,7 +498,7 @@ async def send_chat(
             row.reply_text = (parent.text or "")[:80]
     session.add(row)
     await session.commit()
-    return await _recent_chat(session, match.id)
+    return await _recent_chat(session, match.id, user.id)
 
 
 @router.patch("/{code}/chat/{msg_id}", response_model=list[ChatMessage])
@@ -501,7 +526,7 @@ async def edit_chat(
     row.text = text
     row.edited = True
     await session.commit()
-    return await _recent_chat(session, match.id)
+    return await _recent_chat(session, match.id, user.id)
 
 
 @router.delete("/{code}/chat/{msg_id}", response_model=list[ChatMessage])
@@ -511,17 +536,66 @@ async def delete_chat(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Delete one of your own messages."""
+    """Soft-delete one of your own messages (the row is kept, just hidden)."""
     match = await _load_room(session, code)
     row = (
         await session.execute(
             select(ChatRow).where(ChatRow.id == msg_id, ChatRow.match_id == match.id)
         )
     ).scalar_one_or_none()
-    if row is None:
-        return await _recent_chat(session, match.id)
+    if row is None or row.deleted_at is not None:
+        return await _recent_chat(session, match.id, user.id)
     if row.user_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your message")
-    await session.delete(row)
+    row.deleted_at = datetime.now(timezone.utc)
     await session.commit()
-    return await _recent_chat(session, match.id)
+    return await _recent_chat(session, match.id, user.id)
+
+
+@router.post("/{code}/chat/{msg_id}/react", response_model=list[ChatMessage])
+async def react_chat(
+    code: str,
+    msg_id: int,
+    body: ReactRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Toggle your reaction on a message. One reaction per person per message:
+    tapping the same emoji removes it; a different emoji replaces it."""
+    if body.emoji not in ALLOWED_REACTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown reaction")
+    match = await _load_room(session, code)
+    in_room = any(s.user_id == user.id for s in match.seats) or any(
+        p["user_id"] == user.id for p in _PENDING.get(match.code, [])
+    )
+    if not in_room:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Join the room to react")
+
+    msg = (
+        await session.execute(
+            select(ChatRow).where(
+                ChatRow.id == msg_id,
+                ChatRow.match_id == match.id,
+                ChatRow.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if msg is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+
+    existing = (
+        await session.execute(
+            select(MessageReaction).where(
+                MessageReaction.message_id == msg_id,
+                MessageReaction.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        session.add(MessageReaction(message_id=msg_id, user_id=user.id, emoji=body.emoji))
+    elif existing.emoji == body.emoji:
+        await session.delete(existing)          # tap again to remove
+    else:
+        existing.emoji = body.emoji             # switch reaction
+    await session.commit()
+    return await _recent_chat(session, match.id, user.id)
