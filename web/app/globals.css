@@ -73,6 +73,12 @@
 }
 .lb-pop { animation: lb-pop 0.28s ease-out; }
 
+@keyframes lb-slide-in {
+  0% { transform: translateX(100%); }
+  100% { transform: translateX(0); }
+}
+.lb-slide-in { animation: lb-slide-in 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+
 @keyframes lb-spin {
   to { transform: rotate(360deg); }
 }

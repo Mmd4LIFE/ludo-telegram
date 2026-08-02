@@ -46,6 +46,7 @@ import {
   Ban,
   Target,
   Layers3,
+  ChevronDown,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -1786,6 +1787,7 @@ function ChanceBox({
 function CardsGallery() {
   const [cards, setCards] = useState<CardDef[] | null>(null);
   const [err, setErr] = useState(false);
+  const [selected, setSelected] = useState<CardDef | null>(null);
   useEffect(() => {
     api.getCards().then(setCards).catch(() => setErr(true));
   }, []);
@@ -1797,7 +1799,7 @@ function CardsGallery() {
         <h1 className="text-xl font-extrabold">Fantasy Cards</h1>
       </div>
       <p className="-mt-2 text-xs text-muted-foreground">
-        Bring a token home to draw one of four. Here&apos;s every card and what it does.
+        Bring a piece home to draw one of four. Tap a card to see it in action.
       </p>
 
       {err && <Card className="text-center text-sm text-muted-foreground">Couldn&apos;t load cards.</Card>}
@@ -1807,7 +1809,14 @@ function CardsGallery() {
           {cards.map((c) => {
             const rc = rarityColor(c.rarity);
             return (
-              <div key={c.id} className="flex items-center gap-3 rounded-2xl bg-card p-3 ring-1 ring-white/10">
+              <button
+                key={c.id}
+                onClick={() => {
+                  haptic("light");
+                  setSelected(c);
+                }}
+                className="flex items-center gap-3 rounded-2xl bg-card p-3 text-left ring-1 ring-white/10 transition active:scale-[0.99]"
+              >
                 <div className="grid size-11 shrink-0 place-items-center rounded-xl" style={{ background: rc + "22" }}>
                   <CardIcon id={c.id} size={22} color={rc} />
                 </div>
@@ -1821,14 +1830,206 @@ function CardsGallery() {
                       {c.rarity}
                     </span>
                   </div>
-                  <div className="text-xs text-muted-foreground">{c.description}</div>
+                  <div className="truncate text-xs text-muted-foreground">{c.description}</div>
                 </div>
-              </div>
+                <ChevronDown className="size-4 -rotate-90 text-muted-foreground" />
+              </button>
             );
           })}
         </div>
       )}
+
+      {selected && <CardDetail card={selected} onClose={() => setSelected(null)} />}
     </Shell>
+  );
+}
+
+/* ------ card detail: a slide-in panel with an animated "how it plays" demo ------ */
+
+const DEMO_YOU = "#4a90d9";
+const DEMO_RIVAL = "#d76a6a";
+const DEMO_CELLS = 8;
+const demoLeft = (cell: number) => ((cell + 0.5) / DEMO_CELLS) * 100;
+
+type DemoPiece = {
+  key: string;
+  kind: "you" | "rival";
+  cell: number;
+  shield?: boolean;
+  frozen?: boolean;
+  heart?: boolean;
+  hidden?: boolean;
+};
+type DemoScene = {
+  pieces: DemoPiece[];
+  star?: number;
+  starOn?: boolean;
+  barrier?: number;
+  die?: number;
+  badge?: string;
+  turn?: "you" | "rival";
+  caption: string;
+};
+
+// idle (on=false) vs applied (on=true) — the demo animates between the two, forever
+function demoScene(id: string, on: boolean): DemoScene {
+  switch (id) {
+    case "extra_roll":
+      return { pieces: [{ key: "y", kind: "you", cell: on ? 4 : 2 }], die: on ? 6 : 4, caption: "Take another roll" };
+    case "active_stars":
+      return { pieces: [{ key: "y", kind: "you", cell: 4 }], star: 4, starOn: on, caption: "Your stars turn safe" };
+    case "shield_one":
+      return { pieces: [{ key: "y", kind: "you", cell: 5, shield: true }, { key: "r", kind: "rival", cell: on ? 5 : 3 }], caption: "A piece can't be captured" };
+    case "shield_all":
+      return { pieces: [{ key: "y", kind: "you", cell: 5, shield: true }, { key: "y2", kind: "you", cell: 6, shield: true }, { key: "r", kind: "rival", cell: on ? 5 : 3 }], caption: "All your pieces shielded" };
+    case "double_dice":
+      return { pieces: [{ key: "y", kind: "you", cell: on ? 7 : 1 }], die: 3, badge: on ? "×2" : undefined, caption: "Rolls count double" };
+    case "lock_one":
+      return { pieces: [{ key: "r", kind: "rival", cell: 4, frozen: on }], die: on ? undefined : 4, caption: "Rival skips a turn" };
+    case "lock_two":
+      return { pieces: [{ key: "r", kind: "rival", cell: 4, frozen: on }], caption: "Rival skips 2 turns" };
+    case "swap":
+      return { pieces: [{ key: "y", kind: "you", cell: on ? 6 : 2 }, { key: "r", kind: "rival", cell: on ? 2 : 6 }], caption: "Swap places with a rival" };
+    case "teleport":
+      return { pieces: [{ key: "y", kind: "you", cell: on ? 6 : 2 }], star: 6, starOn: true, caption: "Warp to the next star" };
+    case "recall":
+      return { pieces: [{ key: "r", kind: "rival", cell: on ? 2 : 6 }], caption: "Send a rival back 4" };
+    case "boost":
+      return { pieces: [{ key: "y", kind: "you", cell: on ? 5 : 2 }], caption: "Rush forward 3" };
+    case "summon":
+      return { pieces: [{ key: "y", kind: "you", cell: 0, hidden: !on }], caption: "Free a piece from base" };
+    case "steal_turn":
+      return { pieces: [{ key: "y", kind: "you", cell: 2 }, { key: "r", kind: "rival", cell: 5 }], turn: on ? "you" : "rival", caption: "Take the next turn" };
+    case "second_chance":
+      return { pieces: [{ key: "y", kind: "you", cell: 5, heart: on }, { key: "r", kind: "rival", cell: on ? 5 : 3 }], caption: "Survive one knock" };
+    case "toll":
+      return { pieces: [{ key: "r", kind: "rival", cell: 2 }], star: 4, starOn: true, barrier: on ? 4 : undefined, caption: "Rivals can't pass your star" };
+    case "mirror":
+      return { pieces: [{ key: "r", kind: "rival", cell: 5 }, { key: "y", kind: "you", cell: 2 }], badge: on ? "copy" : undefined, caption: "Replay a rival's card" };
+    case "jackpot":
+      return { pieces: [{ key: "y", kind: "you", cell: 3 }], badge: on ? "+150" : undefined, caption: "Pocket 150 coins" };
+    default:
+      return { pieces: [{ key: "y", kind: "you", cell: on ? 4 : 2 }], caption: "" };
+  }
+}
+
+function CardDemo({ card }: { card: CardDef }) {
+  const [applied, setApplied] = useState(false);
+  const [animate, setAnimate] = useState(false);
+  useEffect(() => {
+    setApplied(false);
+    setAnimate(false);
+    let t1: ReturnType<typeof setTimeout>, t2: ReturnType<typeof setTimeout>, t3: ReturnType<typeof setTimeout>;
+    const cycle = () => {
+      t1 = setTimeout(() => {
+        setAnimate(true);
+        setApplied(true); // glide to the applied state
+        t2 = setTimeout(() => {
+          setAnimate(false);
+          setApplied(false); // snap back invisibly, then loop
+          t3 = setTimeout(cycle, 200);
+        }, 2200);
+      }, 600);
+    };
+    cycle();
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [card.id]);
+
+  const s = demoScene(card.id, applied);
+  const trans = animate
+    ? "left 0.7s cubic-bezier(0.34,1.1,0.64,1), opacity 0.4s ease, transform 0.4s ease"
+    : "none";
+
+  return (
+    <div>
+      <div className="relative h-20 overflow-hidden rounded-2xl bg-secondary/40 ring-1 ring-white/10">
+        {Array.from({ length: DEMO_CELLS - 1 }).map((_, i) => (
+          <div key={i} className="absolute top-0 h-full w-px bg-white/[0.04]" style={{ left: `${((i + 1) / DEMO_CELLS) * 100}%` }} />
+        ))}
+
+        {s.star != null && (
+          <div className="absolute top-1/2" style={{ left: `${demoLeft(s.star)}%`, transform: "translate(-50%,-50%)", transition: trans }}>
+            <Star size={22} color={s.starOn ? "#e5c07b" : "#5b6478"} fill={s.starOn ? "#e5c07b" : "none"} strokeWidth={2} />
+          </div>
+        )}
+        {s.barrier != null && (
+          <div className="absolute top-1/2 h-10 w-1.5 rounded-full bg-[#e5c07b]" style={{ left: `${demoLeft(s.barrier)}%`, transform: "translate(-50%,-50%)" }} />
+        )}
+
+        {s.pieces.map((p) => (
+          <div
+            key={p.key}
+            className="absolute top-1/2"
+            style={{ left: `${demoLeft(p.cell)}%`, transform: "translate(-50%,-50%)", transition: trans, opacity: p.hidden ? 0 : 1 }}
+          >
+            <div className="relative grid size-8 place-items-center rounded-full ring-2 ring-white/70" style={{ background: p.kind === "you" ? DEMO_YOU : DEMO_RIVAL }}>
+              {p.shield && <span className="absolute -inset-1.5 rounded-full border-2 border-dashed border-[#38bdf8]" />}
+              {p.frozen && <Snowflake className="absolute -right-2 -top-2 size-4 text-[#93c5fd]" />}
+              {p.heart && <HeartPulse className="absolute -right-2 -top-2 size-4 text-[#f472b6]" />}
+            </div>
+            {s.turn === p.kind && <ChevronDown className="absolute -top-4 left-1/2 size-4 -translate-x-1/2 text-primary" />}
+          </div>
+        ))}
+
+        {s.die != null && (
+          <div className="absolute right-2 top-2">
+            <DieFace value={s.die} skin="classic" size={22} />
+          </div>
+        )}
+        {s.badge && (
+          <div className="absolute bottom-1.5 right-2 rounded-full bg-primary/20 px-2 py-0.5 text-xs font-extrabold text-primary">
+            {s.badge}
+          </div>
+        )}
+      </div>
+      <p className="mt-2 text-center text-xs text-muted-foreground">{s.caption}</p>
+    </div>
+  );
+}
+
+function CardDetail({ card, onClose }: { card: CardDef; onClose: () => void }) {
+  const rc = rarityColor(card.rarity);
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="lb-slide-in absolute inset-y-0 right-0 flex w-full max-w-md flex-col overflow-y-auto bg-card p-5 ring-1 ring-white/10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button onClick={onClose} className="mb-4 flex items-center gap-1.5 self-start text-sm text-muted-foreground">
+          <ArrowLeft className="size-4" /> Back
+        </button>
+
+        <div className="flex items-center gap-3">
+          <div className="grid size-14 shrink-0 place-items-center rounded-2xl" style={{ background: rc + "22" }}>
+            <CardIcon id={card.id} size={30} color={rc} />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-xl font-extrabold">{card.name}</div>
+            <span className="mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide" style={{ color: rc, background: rc + "22" }}>
+              {card.rarity}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <SectionLabel>How it plays</SectionLabel>
+          <div className="mt-2">
+            <CardDemo card={card} />
+          </div>
+        </div>
+
+        <p className="mt-5 text-sm leading-relaxed text-muted-foreground">{card.description}</p>
+
+        <div className="mt-4 flex items-center gap-2 rounded-xl bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
+          <Layers3 className="size-4 shrink-0 text-primary" />
+          Drawn when you bring a piece home — pick 1 of 4.
+        </div>
+      </div>
+    </div>
   );
 }
 

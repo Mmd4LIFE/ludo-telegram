@@ -3,6 +3,10 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.5.4 — See every card in action
+- Tap any card in the Cards tab to open it — a little looping animation shows exactly what
+  it does on the board (a piece rushing forward, a rival frozen, a swap, a shield…).
+
 ## 0.5.3 — Cards play out on the board
 - After a card resolves, watch it happen: the announcement moves aside so you see the
   board play it out — a Recalled piece gliding back, a swap, a shield snapping on.
