@@ -2544,13 +2544,13 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
         <div className="rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">{err}</div>
       )}
 
-      <div className="flex gap-1.5">
+      <div className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4">
         {ADMIN_TABS.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={cn(
-              "flex-1 rounded-xl py-2 text-[11px] font-bold uppercase tracking-wide transition",
+              "shrink-0 rounded-xl px-3.5 py-2 text-[11px] font-bold uppercase tracking-wide transition",
               tab === t ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground"
             )}
           >
