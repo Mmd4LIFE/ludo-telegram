@@ -3,9 +3,11 @@ from app.models.user import User
 from app.models.match import Match, MatchSeat, MatchStatus
 from app.models.chat import ChatMessage, MessageReaction, ReactionEmoji
 from app.models.event import DiceRoll, Knockout, Card, CardDraw
+from app.models.poll import PollTemplate, Poll, PollOption, PollVote
 
 __all__ = [
     "User", "Match", "MatchSeat", "MatchStatus",
     "ChatMessage", "MessageReaction", "ReactionEmoji",
     "DiceRoll", "Knockout", "Card", "CardDraw",
+    "PollTemplate", "Poll", "PollOption", "PollVote",
 ]

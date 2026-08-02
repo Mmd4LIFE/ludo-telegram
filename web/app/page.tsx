@@ -47,6 +47,7 @@ import {
   Target,
   Layers3,
   ChevronDown,
+  BarChart2,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -66,6 +67,8 @@ import {
   DiceState,
   MatchSummary,
   PlayerStats,
+  Poll,
+  PollTemplate,
   Profile,
 } from "@/lib/api";
 import {
@@ -1007,10 +1010,12 @@ function MatchChat({
   code,
   profile,
   colors,
+  canKnock,
 }: {
   code: string;
   profile: Profile;
   colors: Record<number, string>;
+  canKnock: boolean;
 }) {
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -1019,6 +1024,8 @@ function MatchChat({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [reactionSet, setReactionSet] = useState<string[]>([...REACTIONS]);
+  const [pollTemplates, setPollTemplates] = useState<PollTemplate[]>([]);
+  const [pollMenu, setPollMenu] = useState(false);
   useEffect(() => {
     let alive = true;
     const load = () => api.getChat(code).then((c) => alive && setChat(c)).catch(() => {});
@@ -1027,12 +1034,37 @@ function MatchChat({
       .getReactions()
       .then((r) => alive && r.length && setReactionSet(r))
       .catch(() => {});
+    api
+      .getPollTemplates()
+      .then((t) => alive && setPollTemplates(t))
+      .catch(() => {});
     const id = setInterval(load, 2000);
     return () => {
       alive = false;
       clearInterval(id);
     };
   }, [code]);
+  // templates the player may post right now (a "knock" poll only when a capture is live)
+  const applicablePolls = pollTemplates.filter(
+    (t) => t.trigger !== "knock" || canKnock
+  );
+  const sendPoll = async (templateId: number) => {
+    setPollMenu(false);
+    try {
+      haptic("light");
+      setChat(await api.createPoll(code, templateId));
+    } catch {
+      /* ignore (e.g. no longer a knock situation) */
+    }
+  };
+  const vote = async (pollId: number, optionId: number) => {
+    haptic("light");
+    try {
+      setChat(await api.votePoll(code, pollId, optionId));
+    } catch {
+      /* ignore */
+    }
+  };
   const send = async () => {
     const t = draft.trim();
     if (!t || busy) return;
@@ -1085,6 +1117,17 @@ function MatchChat({
         {[...chat].reverse().map((m) => {
           const mine = m.user_id === profile.id;
           const open = menuId === m.id;
+          if (m.poll) {
+            return (
+              <PollBubble
+                key={m.id}
+                poll={m.poll}
+                askerName={m.name}
+                askerColor={tint(m.user_id)}
+                onVote={(oid) => vote(m.poll!.id, oid)}
+              />
+            );
+          }
           return (
             <div key={m.id} className={cn("flex", mine ? "justify-end pl-8" : "justify-start pr-8")}>
               <div
@@ -1244,14 +1287,45 @@ function MatchChat({
         </div>
       )}
 
-      <div className="flex shrink-0 items-center gap-2 rounded-full bg-white/8 p-1 pl-4 ring-1 ring-white/10 backdrop-blur">
+      {/* poll picker — the applicable instant polls (e.g. "Should I knock it?") */}
+      {pollMenu && applicablePolls.length > 0 && (
+        <div className="mb-1 flex flex-col gap-1 rounded-xl bg-card p-1.5 ring-1 ring-white/10">
+          {applicablePolls.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => sendPoll(t.id)}
+              className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-semibold text-white active:bg-white/5"
+            >
+              <BarChart2 className="size-4 text-primary" />
+              {t.question}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="flex shrink-0 items-center gap-2 rounded-full bg-white/8 p-1 pl-2 ring-1 ring-white/10 backdrop-blur">
+        {applicablePolls.length > 0 && (
+          <button
+            onClick={() => {
+              haptic("light");
+              setPollMenu((v) => !v);
+            }}
+            className={cn(
+              "grid size-8 shrink-0 place-items-center rounded-full transition active:scale-90",
+              pollMenu ? "bg-primary text-primary-foreground" : "bg-white/10 text-primary"
+            )}
+            aria-label="Poll"
+          >
+            <BarChart2 className="size-4" />
+          </button>
+        )}
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder={editingId != null ? "Edit message…" : replyTo ? "Reply…" : "Message…"}
           maxLength={200}
-          className="h-8 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          className="h-8 flex-1 bg-transparent pl-1 text-sm outline-none placeholder:text-muted-foreground"
         />
         <button
           onClick={send}
@@ -1261,6 +1335,68 @@ function MatchChat({
         >
           {editingId != null ? <Check className="size-4" /> : <Send className="size-4" />}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------- in-chat poll bubble */
+
+function PollBubble({
+  poll,
+  askerName,
+  askerColor,
+  onVote,
+}: {
+  poll: Poll;
+  askerName: string;
+  askerColor: string;
+  onVote: (optionId: number) => void;
+}) {
+  const total = poll.total_votes;
+  return (
+    <div className="flex justify-center px-2">
+      <div className="w-full max-w-[92%] rounded-2xl bg-card/90 p-3 ring-1 ring-white/10 backdrop-blur">
+        <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <BarChart2 className="size-3.5 text-primary" />
+          <span className="font-bold" style={{ color: askerColor }}>{askerName}</span>
+          <span>asks</span>
+        </div>
+        <div className="mb-2.5 text-sm font-extrabold text-white">{poll.question}</div>
+        <div className="flex flex-col gap-1.5">
+          {poll.options.map((o) => {
+            const pct = total ? Math.round((o.votes / total) * 100) : 0;
+            const picked = poll.my_vote === o.id;
+            return (
+              <button
+                key={o.id}
+                onClick={() => onVote(o.id)}
+                className={cn(
+                  "relative overflow-hidden rounded-xl px-3 py-2 text-left ring-1 transition active:scale-[0.99]",
+                  picked ? "ring-primary" : "ring-white/10"
+                )}
+              >
+                <div
+                  className="absolute inset-y-0 left-0 rounded-xl bg-primary/20 transition-all"
+                  style={{ width: `${pct}%` }}
+                />
+                <div className="relative flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-1.5 font-semibold text-white">
+                    {picked && <Check className="size-3.5 text-primary" />}
+                    {o.text}
+                  </span>
+                  <span className="tabular-nums text-xs text-muted-foreground">
+                    {o.votes}
+                    {total > 0 && ` · ${pct}%`}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          {total === 0 ? "No votes yet — tap to vote" : `${total} vote${total === 1 ? "" : "s"}`}
+        </div>
       </div>
     </div>
   );
@@ -1514,6 +1650,7 @@ function LiveMatch({
           <MatchChat
             code={code}
             profile={profile}
+            canKnock={myTurn && state.phase === "move" && legal.some((m) => m.captures.length > 0)}
             colors={Object.fromEntries(
               Object.entries(seatUser)
                 .filter(([, uid]) => uid != null)
@@ -2341,7 +2478,7 @@ function ProfileStat({ label, value }: { label: string; value: number | string }
 
 /* ---------------------------------------------------------------- admin */
 
-const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions"] as const;
+const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions", "polls"] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
 const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   overview: "Overview",
@@ -2349,6 +2486,7 @@ const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   chats: "Chats",
   knocks: "Knocks",
   reactions: "Reactions",
+  polls: "Polls",
 };
 
 function AdminPanel({ onBack }: { onBack: () => void }) {
@@ -2425,6 +2563,7 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
       {tab === "chats" && <ChatBrowser />}
       {tab === "knocks" && <KnockLeaderboard />}
       {tab === "reactions" && <ReactionManager />}
+      {tab === "polls" && <PollManager />}
 
       {tab === "overview" && (
       <>
@@ -2663,6 +2802,106 @@ function KnockLeaderboard() {
           </table>
         </div>
       )}
+    </Card>
+  );
+}
+
+/* -------------------------------------------------- admin: instant polls */
+
+function PollManager() {
+  const [rows, setRows] = useState<PollTemplate[]>([]);
+  const [q, setQ] = useState("");
+  const [opts, setOpts] = useState("Yes, No");
+  const [trigger, setTrigger] = useState("knock");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.adminPollTemplates().then(setRows).catch((e) => setErr(String(e)));
+  }, []);
+
+  const add = async () => {
+    const question = q.trim();
+    const options = opts.split(",").map((o) => o.trim()).filter(Boolean);
+    if (!question || options.length < 2 || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      setRows(await api.adminAddPollTemplate(question, options, trigger));
+      setQ("");
+      setOpts("Yes, No");
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async (id: number) => {
+    try {
+      setRows(await api.adminRemovePollTemplate(id));
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  return (
+    <Card>
+      <SectionLabel>Instant polls</SectionLabel>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Quick polls a player can drop in chat. A <b>knock</b> poll only appears when they can
+        actually capture; <b>any</b> is always available.
+      </p>
+
+      <div className="mt-3 flex flex-col gap-2">
+        {rows.map((t) => (
+          <div key={t.id} className="flex items-center gap-2 rounded-xl bg-secondary/60 px-3 py-2 ring-1 ring-white/10">
+            <BarChart2 className="size-4 shrink-0 text-primary" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold">{t.question}</div>
+              <div className="text-[11px] text-muted-foreground">
+                {t.options.join(" · ")} — <span className="uppercase">{t.trigger}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => remove(t.id)}
+              className="grid size-6 shrink-0 place-items-center rounded-full bg-red/80 text-white active:scale-90"
+              aria-label="Remove"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </div>
+        ))}
+        {rows.length === 0 && <span className="text-xs text-muted-foreground">No polls yet.</span>}
+      </div>
+
+      <div className="mt-4 flex flex-col gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Question — e.g. Should I knock it?"
+          className="rounded-xl bg-secondary px-3 py-2 text-sm outline-none ring-1 ring-white/10 focus:ring-primary/50"
+        />
+        <input
+          value={opts}
+          onChange={(e) => setOpts(e.target.value)}
+          placeholder="Options, comma-separated"
+          className="rounded-xl bg-secondary px-3 py-2 text-sm outline-none ring-1 ring-white/10 focus:ring-primary/50"
+        />
+        <div className="flex gap-2">
+          <select
+            value={trigger}
+            onChange={(e) => setTrigger(e.target.value)}
+            className="flex-1 rounded-xl bg-secondary px-3 py-2 text-sm outline-none ring-1 ring-white/10"
+          >
+            <option value="knock">knock</option>
+            <option value="any">any</option>
+          </select>
+          <Button onClick={add} disabled={busy || !q.trim()}>
+            <Plus className="size-4" /> Add
+          </Button>
+        </div>
+      </div>
+      {err && <div className="mt-2 text-xs text-red">{err}</div>}
     </Card>
   );
 }

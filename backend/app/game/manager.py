@@ -41,6 +41,10 @@ class MatchManager:
         if rt is not None:
             rt.submit(user_id, msg)
 
+    def knock_available(self, match_id: int, user_id: int) -> bool:
+        rt = self._runtimes.get(match_id)
+        return bool(rt and rt.knock_available(user_id))
+
     async def create_rematch(self, session: AsyncSession, old_match_id: int) -> Match:
         """Clone a finished match's seats into a fresh PLAYING match (a rematch)."""
         seats = (

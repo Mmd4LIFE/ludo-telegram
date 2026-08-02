@@ -3,6 +3,12 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.6.0 — Ask the table: polls in chat
+- When you're about to knock a rival, you can now drop a quick poll in chat — "Should I
+  knock it? Yes / No" — and everyone votes live.
+- Admins manage these instant polls in a new Polls tab (question, options, and whether it
+  shows only when a capture is available).
+
 ## 0.5.4 — See every card in action
 - Tap any card in the Cards tab to open it — a little looping animation shows exactly what
   it does on the board (a piece rushing forward, a rival frozen, a swap, a shield…).

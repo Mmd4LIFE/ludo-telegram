@@ -99,6 +99,31 @@ export interface MatchSummary {
   pending: PendingJoiner[];
 }
 
+export interface PollOption {
+  id: number;
+  text: string;
+  position: number;
+  votes: number;
+}
+
+export interface Poll {
+  id: number;
+  question: string;
+  kind: string;
+  status: string;
+  total_votes: number;
+  my_vote: number | null;
+  options: PollOption[];
+}
+
+export interface PollTemplate {
+  id: number;
+  question: string;
+  options: string[];
+  trigger: string; // "knock" | "any"
+  enabled: boolean;
+}
+
 export interface ChatMessage {
   id: number;
   user_id: number;
@@ -110,6 +135,7 @@ export interface ChatMessage {
   reply_text: string | null;
   reactions: Record<string, number>; // emoji -> count
   my_reaction: string | null;
+  poll: Poll | null;
 }
 
 // Keep in step with ALLOWED_REACTIONS on the backend.
@@ -266,6 +292,11 @@ export const api = {
   userProfile: (id: number) => req<PlayerStats>("GET", `/api/users/${id}/profile`),
   getReactions: () => req<string[]>("GET", "/api/reactions"),
   getCards: () => req<Card[]>("GET", "/api/cards"),
+  getPollTemplates: () => req<PollTemplate[]>("GET", "/api/poll-templates"),
+  createPoll: (code: string, template_id: number) =>
+    req<ChatMessage[]>("POST", `/api/matches/${code}/polls`, { template_id }),
+  votePoll: (code: string, poll_id: number, option_id: number) =>
+    req<ChatMessage[]>("POST", `/api/matches/${code}/polls/${poll_id}/vote`, { option_id }),
   matchKnocks: (code: string) => req<KnockEvent[]>("GET", `/api/matches/${code}/knocks`),
   adminStats: () => req<AdminStats>("GET", "/api/admin/stats"),
   adminKnocks: () => req<AdminKnockRow[]>("GET", "/api/admin/knocks"),
@@ -278,6 +309,11 @@ export const api = {
     req<AdminReaction[]>("DELETE", `/api/admin/reactions/${id}`),
   adminMatchChat: (ref: string) =>
     req<AdminChatView>("GET", `/api/admin/matches/${encodeURIComponent(ref)}/chat`),
+  adminPollTemplates: () => req<PollTemplate[]>("GET", "/api/admin/poll-templates"),
+  adminAddPollTemplate: (question: string, options: string[], trigger: string) =>
+    req<PollTemplate[]>("POST", "/api/admin/poll-templates", { question, options, trigger }),
+  adminRemovePollTemplate: (id: number) =>
+    req<PollTemplate[]>("DELETE", `/api/admin/poll-templates/${id}`),
   adminTables: () => req<AdminTable[]>("GET", "/api/admin/data/tables"),
   adminRows: (table: string, limit = 25, offset = 0) =>
     req<AdminRows>("GET", `/api/admin/data/rows/${table}?limit=${limit}&offset=${offset}`),

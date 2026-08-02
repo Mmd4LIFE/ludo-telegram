@@ -38,6 +38,11 @@ class ChatMessage(Base):
         DateTime(timezone=True), default=None
     )
 
+    # when set, this message IS a poll (rendered as a poll card in the feed)
+    poll_id: Mapped[int | None] = mapped_column(
+        ForeignKey("polls.id", ondelete="SET NULL"), default=None
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

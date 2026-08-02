@@ -146,6 +146,14 @@ class MatchRuntime:
             return None
         return self.seat_user.get(seat)
 
+    def knock_available(self, user_id: int) -> bool:
+        """True when it's this user's move and a capturing move is legal — the moment the
+        'Should I knock it?' poll is offered."""
+        seat = next((s for s, u in self.seat_user.items() if u == user_id), None)
+        if seat is None or self.state.current != seat or self.state.phase is not Phase.MOVE:
+            return False
+        return any(m.captures for m in legal_moves(self.state))
+
     def _human_watching(self) -> bool:
         return hub.has_viewers(self.code)
 

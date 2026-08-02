@@ -12,10 +12,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_session
-from app.models import User, ReactionEmoji, Card
-from app.schemas import PlayerStats, CardOut
+from app.models import User, ReactionEmoji, Card, PollTemplate
+from app.schemas import PlayerStats, CardOut, PollTemplateOut
 
 router = APIRouter(prefix="/api", tags=["stats"])
+
+
+@router.get("/poll-templates", response_model=list[PollTemplateOut])
+async def poll_templates(
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Instant-poll templates a player may post in chat (enabled only), ordered."""
+    rows = (
+        await session.execute(
+            select(PollTemplate).where(PollTemplate.enabled.is_(True))
+            .order_by(PollTemplate.position, PollTemplate.id)
+        )
+    ).scalars().all()
+    return [
+        PollTemplateOut(id=t.id, question=t.question, options=list(t.options or []),
+                        trigger=t.trigger, enabled=t.enabled)
+        for t in rows
+    ]
 
 
 @router.get("/cards", response_model=list[CardOut])

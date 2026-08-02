@@ -15,9 +15,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import require_admin
 from app.database import Base, get_session
-from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji
+from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate
 from app.models import ChatMessage as ChatRow
 from app.schemas import (
+    AddPollTemplateRequest,
     AddReactionRequest,
     AdminChatEntry,
     AdminChatSeat,
@@ -25,6 +26,7 @@ from app.schemas import (
     AdminKnockRow,
     AdminStats,
     AdminUser,
+    PollTemplateOut,
     ReactionEmojiOut,
 )
 
@@ -161,6 +163,55 @@ async def remove_reaction(
         await session.delete(row)
         await session.commit()
     return await list_reactions(_admin=_admin, session=session)
+
+
+# --- instant-poll templates -------------------------------------------------
+def _tmpl_out(t: PollTemplate) -> PollTemplateOut:
+    return PollTemplateOut(
+        id=t.id, question=t.question, options=list(t.options or []),
+        trigger=t.trigger, enabled=t.enabled,
+    )
+
+
+@router.get("/poll-templates", response_model=list[PollTemplateOut])
+async def list_poll_templates(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = (
+        await session.execute(select(PollTemplate).order_by(PollTemplate.position, PollTemplate.id))
+    ).scalars().all()
+    return [_tmpl_out(t) for t in rows]
+
+
+@router.post("/poll-templates", response_model=list[PollTemplateOut])
+async def add_poll_template(
+    body: AddPollTemplateRequest,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    q = body.question.strip()
+    opts = [o.strip() for o in body.options if o.strip()]
+    if not q or len(opts) < 2:
+        raise HTTPException(400, "A question and at least two options are required")
+    trigger = body.trigger if body.trigger in ("knock", "any") else "any"
+    top = (await session.execute(select(func.coalesce(func.max(PollTemplate.position), -1)))).scalar_one()
+    session.add(PollTemplate(question=q[:200], options=opts, trigger=trigger, position=int(top) + 1))
+    await session.commit()
+    return await list_poll_templates(_admin=_admin, session=session)
+
+
+@router.delete("/poll-templates/{tmpl_id}", response_model=list[PollTemplateOut])
+async def remove_poll_template(
+    tmpl_id: int,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    row = await session.get(PollTemplate, tmpl_id)
+    if row is not None:
+        await session.delete(row)
+        await session.commit()
+    return await list_poll_templates(_admin=_admin, session=session)
 
 
 # --- knock leaderboard ------------------------------------------------------

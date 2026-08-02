@@ -15,6 +15,8 @@ from app.database import get_session
 from app.ludo.board import Color
 from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, Knockout
 from app.models import ChatMessage as ChatRow
+from app.models import PollTemplate, Poll, PollOption, PollVote
+from app.game.manager import manager
 from datetime import datetime, timezone
 import math
 import random
@@ -23,6 +25,7 @@ import time
 from app.schemas import (
     AcceptJoinerRequest,
     ChatMessage,
+    CreatePollRequest,
     DiceEntry,
     DiceState,
     CreateMatchRequest,
@@ -30,11 +33,14 @@ from app.schemas import (
     KnockEvent,
     MatchSummary,
     PendingJoiner,
+    PollOptionOut,
+    PollOut,
     ReactRequest,
     RejectJoinerRequest,
     SeatInfo,
     SetColorRequest,
     SendChatRequest,
+    VoteRequest,
 )
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
@@ -493,15 +499,62 @@ async def _recent_chat(
             if rx.user_id == me_id:
                 mine[rx.message_id] = rx.emoji
 
+    polls = await _polls_for(session, [r.poll_id for r in rows if r.poll_id], me_id)
+
     return [
         ChatMessage(
             id=r.id, user_id=r.user_id, name=r.name, text=r.text,
             edited=r.edited, reply_to=r.reply_to,
             reply_name=r.reply_name, reply_text=r.reply_text,
             reactions=counts.get(r.id, {}), my_reaction=mine.get(r.id),
+            poll=polls.get(r.poll_id) if r.poll_id else None,
         )
         for r in rows
     ]
+
+
+async def _polls_for(
+    session: AsyncSession, poll_ids: list[int], me_id: int
+) -> dict[int, PollOut]:
+    """Build a PollOut (options + vote tallies + the viewer's vote) for each poll id."""
+    ids = [pid for pid in poll_ids if pid]
+    if not ids:
+        return {}
+    polls = (
+        await session.execute(select(Poll).where(Poll.id.in_(ids)))
+    ).scalars().all()
+    options = (
+        await session.execute(
+            select(PollOption).where(PollOption.poll_id.in_(ids)).order_by(PollOption.position, PollOption.id)
+        )
+    ).scalars().all()
+    votes = (
+        await session.execute(select(PollVote).where(PollVote.poll_id.in_(ids)))
+    ).scalars().all()
+
+    by_opt: dict[int, int] = {}
+    total: dict[int, int] = {}
+    mine: dict[int, int] = {}
+    for v in votes:
+        by_opt[v.option_id] = by_opt.get(v.option_id, 0) + 1
+        total[v.poll_id] = total.get(v.poll_id, 0) + 1
+        if v.user_id == me_id:
+            mine[v.poll_id] = v.option_id
+
+    opts_by_poll: dict[int, list[PollOptionOut]] = {}
+    for o in options:
+        opts_by_poll.setdefault(o.poll_id, []).append(
+            PollOptionOut(id=o.id, text=o.text, position=o.position, votes=by_opt.get(o.id, 0))
+        )
+
+    out: dict[int, PollOut] = {}
+    for p in polls:
+        out[p.id] = PollOut(
+            id=p.id, question=p.question, kind=p.kind, status=p.status,
+            total_votes=total.get(p.id, 0), my_vote=mine.get(p.id),
+            options=opts_by_poll.get(p.id, []),
+        )
+    return out
 
 
 @router.get("/{code}/chat", response_model=list[ChatMessage])
@@ -651,5 +704,79 @@ async def react_chat(
         await session.delete(existing)          # tap again to remove
     else:
         existing.emoji = body.emoji             # switch reaction
+    await session.commit()
+    return await _recent_chat(session, match.id, user.id)
+
+
+# --- polls ------------------------------------------------------------------
+@router.post("/{code}/polls", response_model=list[ChatMessage])
+async def create_poll(
+    code: str,
+    body: CreatePollRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Spawn an instant poll from a template into the chat. A "knock"-triggered template
+    may only be sent when the sender actually has a capture available right now."""
+    match = await _load_room(session, code)
+    in_room = any(s.user_id == user.id for s in match.seats)
+    if not in_room:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Join the room to post a poll")
+
+    tmpl = await session.get(PollTemplate, body.template_id)
+    if tmpl is None or not tmpl.enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Poll not found")
+    opts = [str(o).strip() for o in (tmpl.options or []) if str(o).strip()]
+    if len(opts) < 2:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Poll needs at least two options")
+    if tmpl.trigger == "knock" and not manager.knock_available(match.id, user.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "You can only ask this when you can knock")
+
+    poll = Poll(
+        match_id=match.id, created_by=user.id, template_id=tmpl.id,
+        question=tmpl.question, kind="instant", status="open",
+    )
+    session.add(poll)
+    await session.flush()
+    for i, text in enumerate(opts):
+        session.add(PollOption(poll_id=poll.id, text=text[:100], position=i))
+    session.add(ChatRow(
+        match_id=match.id, user_id=user.id, name=user.first_name or "Player",
+        text=tmpl.question, poll_id=poll.id,
+    ))
+    await session.commit()
+    return await _recent_chat(session, match.id, user.id)
+
+
+@router.post("/{code}/polls/{poll_id}/vote", response_model=list[ChatMessage])
+async def vote_poll(
+    code: str,
+    poll_id: int,
+    body: VoteRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Cast (or change) your vote on a poll. One vote per person; re-voting moves it."""
+    match = await _load_room(session, code)
+    poll = await session.get(Poll, poll_id)
+    if poll is None or poll.match_id != match.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Poll not found")
+    if poll.status != "open":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Poll is closed")
+    opt = await session.get(PollOption, body.option_id)
+    if opt is None or opt.poll_id != poll_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown option")
+
+    existing = (
+        await session.execute(
+            select(PollVote).where(PollVote.poll_id == poll_id, PollVote.user_id == user.id)
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        session.add(PollVote(poll_id=poll_id, option_id=opt.id, user_id=user.id))
+    elif existing.option_id == opt.id:
+        await session.delete(existing)          # tap your choice again to un-vote
+    else:
+        existing.option_id = opt.id             # move your vote
     await session.commit()
     return await _recent_chat(session, match.id, user.id)

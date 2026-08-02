@@ -279,6 +279,45 @@ class JoinMatchRequest(BaseModel):
 
 
 # --- room lobby chat ---------------------------------------------------------
+class PollOptionOut(BaseModel):
+    id: int
+    text: str
+    position: int = 0
+    votes: int = 0
+
+
+class PollOut(BaseModel):
+    id: int
+    question: str
+    kind: str = "instant"
+    status: str = "open"
+    total_votes: int = 0
+    my_vote: int | None = None       # option id the viewer voted for, if any
+    options: list[PollOptionOut] = []
+
+
+class PollTemplateOut(BaseModel):
+    id: int
+    question: str
+    options: list[str] = []
+    trigger: str = "any"             # "knock" | "any"
+    enabled: bool = True
+
+
+class CreatePollRequest(BaseModel):
+    template_id: int
+
+
+class VoteRequest(BaseModel):
+    option_id: int
+
+
+class AddPollTemplateRequest(BaseModel):
+    question: str
+    options: list[str] = []
+    trigger: str = "any"
+
+
 class ChatMessage(BaseModel):
     id: int
     user_id: int
@@ -290,6 +329,7 @@ class ChatMessage(BaseModel):
     reply_text: str | None = None    # snapshot of the replied-to text (truncated)
     reactions: dict[str, int] = {}   # emoji -> count
     my_reaction: str | None = None   # the viewer's own reaction, if any
+    poll: PollOut | None = None      # present when this message is a poll
 
 
 class SendChatRequest(BaseModel):
