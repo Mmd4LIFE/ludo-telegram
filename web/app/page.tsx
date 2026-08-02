@@ -1122,8 +1122,9 @@ function MatchChat({
               <PollBubble
                 key={m.id}
                 poll={m.poll}
-                askerName={m.name}
-                askerColor={tint(m.user_id)}
+                mine={mine}
+                senderName={m.name}
+                tint={tint(m.user_id)}
                 onVote={(oid) => vote(m.poll!.id, oid)}
               />
             );
@@ -1344,58 +1345,69 @@ function MatchChat({
 
 function PollBubble({
   poll,
-  askerName,
-  askerColor,
+  mine,
+  senderName,
+  tint,
   onVote,
 }: {
   poll: Poll;
-  askerName: string;
-  askerColor: string;
+  mine: boolean;
+  senderName: string;
+  tint: string;
   onVote: (optionId: number) => void;
 }) {
   const total = poll.total_votes;
   return (
-    <div className="flex justify-center px-2">
-      <div className="w-full max-w-[92%] rounded-2xl bg-card/90 p-3 ring-1 ring-white/10 backdrop-blur">
-        <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <BarChart2 className="size-3.5 text-primary" />
-          <span className="font-bold" style={{ color: askerColor }}>{askerName}</span>
-          <span>asks</span>
-        </div>
-        <div className="mb-2.5 text-sm font-extrabold text-white">{poll.question}</div>
-        <div className="flex flex-col gap-1.5">
-          {poll.options.map((o) => {
-            const pct = total ? Math.round((o.votes / total) * 100) : 0;
-            const picked = poll.my_vote === o.id;
-            return (
-              <button
-                key={o.id}
-                onClick={() => onVote(o.id)}
-                className={cn(
-                  "relative overflow-hidden rounded-xl px-3 py-2 text-left ring-1 transition active:scale-[0.99]",
-                  picked ? "ring-primary" : "ring-white/10"
-                )}
-              >
-                <div
-                  className="absolute inset-y-0 left-0 rounded-xl bg-primary/20 transition-all"
-                  style={{ width: `${pct}%` }}
-                />
-                <div className="relative flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-1.5 font-semibold text-white">
-                    {picked && <Check className="size-3.5 text-primary" />}
-                    {o.text}
-                  </span>
-                  <span className="tabular-nums text-xs text-muted-foreground">
-                    {o.votes}
-                    {total > 0 && ` · ${pct}%`}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-2 text-[11px] text-muted-foreground">
-          {total === 0 ? "No votes yet — tap to vote" : `${total} vote${total === 1 ? "" : "s"}`}
+    <div className={cn("flex", mine ? "justify-end pl-8" : "justify-start pr-8")}>
+      <div className={cn("flex max-w-[88%] items-start gap-2", mine && "flex-row-reverse")}>
+        <span
+          className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white ring-1 ring-white/20"
+          style={{ background: tint }}
+        >
+          {(senderName || "P").slice(0, 1).toUpperCase()}
+        </span>
+        <div className="min-w-[170px] max-w-full">
+          {!mine && (
+            <div className="mb-0.5 text-[13px] font-bold" style={{ color: tint, textShadow: "0 1px 3px rgba(0,0,0,0.7)" }}>
+              {senderName}
+            </div>
+          )}
+          <div className="rounded-2xl bg-card/90 p-2 text-left ring-1 ring-white/10">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[13px] font-bold text-white">
+              <BarChart2 className="size-3.5 shrink-0 text-primary" />
+              {poll.question}
+            </div>
+            <div className="flex flex-col gap-1">
+              {poll.options.map((o) => {
+                const pct = total ? Math.round((o.votes / total) * 100) : 0;
+                const picked = poll.my_vote === o.id;
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => onVote(o.id)}
+                    className={cn(
+                      "relative overflow-hidden rounded-lg px-2.5 py-1.5 text-left ring-1 transition active:scale-[0.99]",
+                      picked ? "ring-primary" : "ring-white/10"
+                    )}
+                  >
+                    <div className="absolute inset-y-0 left-0 bg-primary/20 transition-all" style={{ width: `${pct}%` }} />
+                    <div className="relative flex items-center justify-between gap-2 text-[13px]">
+                      <span className="flex items-center gap-1 font-semibold text-white">
+                        {picked && <Check className="size-3 text-primary" />}
+                        {o.text}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
+                        {total > 0 ? `${pct}%` : "—"}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-1 text-[10px] text-muted-foreground">
+              {total === 0 ? "tap to vote" : `${total} vote${total === 1 ? "" : "s"}`}
+            </div>
+          </div>
         </div>
       </div>
     </div>
