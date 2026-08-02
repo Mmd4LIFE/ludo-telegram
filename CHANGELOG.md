@@ -3,6 +3,12 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.5.3 — Cards play out on the board
+- After a card resolves, watch it happen: the announcement moves aside so you see the
+  board play it out — a Recalled piece gliding back, a swap, a shield snapping on.
+- Finishing your last piece no longer hands you a wasted power-up: you're only offered
+  cards that shake up your rivals (and none once the game's already decided).
+
 ## 0.5.2 — Cards, polished
 - Cards now use crisp icons instead of emoji, with a professional draw: pick → flip →
   (choose your target) → see the result — and everyone at the table sees what happened.

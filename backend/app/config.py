@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     MOVE_SETTLE_SECONDS: float = 0.45       # let a token's glide finish before the next act
     CARD_PICK_SECONDS: int = 20             # a player has this long to pick a fantasy card
     CARD_REVEAL_SECONDS: float = 3.5        # hold on the flipped cards after a pick
+    CARD_RESULT_DELAY: float = 0.6          # beat before a card's effect plays out on the board
     IDLE_SEAT_GRACE_SECONDS: int = 90       # keep a seat this long after disconnect
     JANITOR_INTERVAL_SECONDS: int = 30
 

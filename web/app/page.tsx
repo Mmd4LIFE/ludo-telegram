@@ -1661,6 +1661,34 @@ function ChanceBox({
   else if (stage === "target") title = mine ? "Choose a target" : `${drawerName} is aiming`;
   else title = mine ? "You played" : `${drawerName} played`;
 
+  // Result: a slim, non-blocking banner so the BOARD stays visible and plays the effect
+  // out (a Recall token gliding back, a Swap, a shield appearing) while it's announced.
+  if (stage === "result") {
+    const rc = pickedCard ? rarityColor(pickedCard.rarity) : "#7c8698";
+    return (
+      <div className="pointer-events-none fixed inset-x-0 top-3 z-[70] flex justify-center px-4">
+        <div className="lb-pop flex max-w-sm items-center gap-3 rounded-2xl bg-card/95 px-4 py-2.5 shadow-xl ring-1 ring-white/10 backdrop-blur">
+          <div className="grid size-9 shrink-0 place-items-center rounded-xl" style={{ background: rc + "22" }}>
+            {pickedCard && <CardIcon id={pickedCard.id} size={20} color={rc} />}
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+            <div className="flex items-center gap-1.5 text-sm font-extrabold">
+              <span className="truncate">{pickedCard?.name ?? "…"}</span>
+              {card.target != null && (
+                <>
+                  <span className="text-muted-foreground">→</span>
+                  <span className="size-2.5 shrink-0 rounded-full" style={{ background: seatColor[String(card.target)] ?? "#8892a6" }} />
+                  <span className="truncate">{nameOf(card.target)}</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/75 px-6 backdrop-blur-md">
       <div className="mb-1 text-center text-xs font-bold uppercase tracking-widest text-primary">{title}</div>
@@ -1719,50 +1747,34 @@ function ChanceBox({
         </div>
       )}
 
-      {/* target / result: the picked card, plus the target picker or the outcome */}
-      {(stage === "target" || stage === "result") && (
+      {/* target: the picked card + the opponent picker */}
+      {stage === "target" && (
         <div className="flex w-full max-w-xs flex-col items-center gap-4">
           <div className="w-32" style={{ aspectRatio: "3 / 4" }}>
             <CardFace c={pickedCard} big highlight />
           </div>
-
-          {stage === "target" && (
-            <div className="w-full">
-              <p className="mb-2 text-center text-xs text-muted-foreground">
-                {mine ? "Tap a player to hit" : "Choosing who to hit…"}
-              </p>
-              <div className="flex flex-col gap-2">
-                {(card.targets ?? []).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => tapTarget(s)}
-                    disabled={!mine || targeted !== null}
-                    className={cn(
-                      "flex items-center gap-3 rounded-2xl bg-card px-4 py-3 ring-1 transition active:scale-95",
-                      targeted === s ? "ring-primary" : "ring-white/10"
-                    )}
-                  >
-                    <span className="size-4 shrink-0 rounded-full" style={{ background: seatColor[String(s)] ?? "#8892a6" }} />
-                    <span className="flex-1 text-left font-bold text-white">{nameOf(s)}</span>
-                    <Target className="size-4 text-muted-foreground" />
-                  </button>
-                ))}
-              </div>
+          <div className="w-full">
+            <p className="mb-2 text-center text-xs text-muted-foreground">
+              {mine ? "Tap a player to hit" : "Choosing who to hit…"}
+            </p>
+            <div className="flex flex-col gap-2">
+              {(card.targets ?? []).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => tapTarget(s)}
+                  disabled={!mine || targeted !== null}
+                  className={cn(
+                    "flex items-center gap-3 rounded-2xl bg-card px-4 py-3 ring-1 transition active:scale-95",
+                    targeted === s ? "ring-primary" : "ring-white/10"
+                  )}
+                >
+                  <span className="size-4 shrink-0 rounded-full" style={{ background: seatColor[String(s)] ?? "#8892a6" }} />
+                  <span className="flex-1 text-left font-bold text-white">{nameOf(s)}</span>
+                  <Target className="size-4 text-muted-foreground" />
+                </button>
+              ))}
             </div>
-          )}
-
-          {stage === "result" && (
-            <div className="text-center">
-              {card.target != null ? (
-                <div className="flex items-center justify-center gap-2 text-lg font-extrabold text-white">
-                  <span className="size-3 rounded-full" style={{ background: seatColor[String(card.target)] ?? "#8892a6" }} />
-                  {nameOf(card.target)}
-                </div>
-              ) : (
-                <p className="text-sm text-white/90">{pickedCard?.description}</p>
-              )}
-            </div>
-          )}
+          </div>
         </div>
       )}
     </div>

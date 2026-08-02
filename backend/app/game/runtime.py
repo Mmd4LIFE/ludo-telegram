@@ -295,13 +295,19 @@ class MatchRuntime:
             await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
             # Bringing a token home earns a fantasy-card draw (humans only) — the reward
-            # that replaced the old "reach home = extra roll".
-            if res.reached_home and mover is not None:
-                await self._draw_card(seat, turn_no)
+            # that replaced the old "reach home = extra roll". No draw once the game is over.
+            if res.reached_home and mover is not None and self.state.phase is not Phase.FINISHED:
+                if self.state.players[seat].all_home():
+                    # this was their LAST token — they're done, so a self-buff is wasted.
+                    # Only offer disruptive cards (that hit rivals); skip if none apply.
+                    await self._draw_card(seat, turn_no, pool=self._OFFENSIVE)
+                else:
+                    await self._draw_card(seat, turn_no)
 
-    async def _draw_card(self, seat: int, turn_no: int) -> None:
+    async def _draw_card(self, seat: int, turn_no: int, pool: frozenset[str] | None = None) -> None:
         """Offer four random cards face-down, wait for the player's pick (auto-pick on
-        timeout), reveal all four, apply the pick, and log the draw."""
+        timeout), reveal them, let them choose a target if needed, then apply + log. When
+        ``pool`` is given, only cards whose effect is in it are offered (finishers)."""
         uid = self._human_uid(seat)
         if uid is None:
             return
@@ -313,9 +319,10 @@ class MatchRuntime:
                 )
             ).all()
         effects = {cid: eff for cid, eff in rows}
-        if len(effects) < 4:
-            return   # catalog too small to offer a draw (shouldn't happen)
-        options = self._rng.sample(list(effects.keys()), 4)
+        ids = [cid for cid in effects if pool is None or effects[cid] in pool]
+        if len(ids) < 4:
+            return   # not enough eligible cards to offer a proper draw
+        options = self._rng.sample(ids, 4)
 
         self._card = {"seat": seat, "stage": "pick"}   # face-down; ids withheld until reveal
         self._deadline = time.time() + settings.CARD_PICK_SECONDS
@@ -362,18 +369,25 @@ class MatchRuntime:
                         chosen = None
                 target = chosen if chosen in targets else self._leading_among(seat, targets)
 
-        # 3) apply the effect (to the chosen/auto target) and log the draw
+        # 3) drop to a non-blocking result banner FIRST (board becomes visible) so that,
+        #    when the effect lands, everyone watches the board play it out (a Recall token
+        #    gliding back, a Swap, a shield ring appearing) instead of it happening hidden
+        #    behind the card overlay.
+        self._card = {
+            "seat": seat, "stage": "result", "options": options,
+            "picked": idx, "target": target,
+        }
+        await self._broadcast()
+        await asyncio.sleep(settings.CARD_RESULT_DELAY)
+
+        # 4) now apply the effect + log — the state change animates on the visible board
         affected = self._apply_card(seat, effect, target)
         self.buf_cards.append({
             "match_id": self.match_id, "user_id": uid, "seat": seat,
             "options": options, "picked": picked, "turn": turn_no,
         })
-
-        # 4) show the resolved result (who was hit) to everyone
-        self._card = {
-            "seat": seat, "stage": "result", "options": options,
-            "picked": idx, "target": affected,
-        }
+        if affected is not None and affected != target:
+            self._card = {**self._card, "target": affected}
         await self._broadcast()
         await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
         self._card = None
@@ -381,6 +395,8 @@ class MatchRuntime:
 
     # cards whose effect lands on a chosen opponent
     _TARGETING = frozenset({"lock", "lock2", "recall", "swap"})
+    # disruptive cards a finished player may still play (no self-benefit, hits rivals)
+    _OFFENSIVE = frozenset({"lock", "lock2", "recall", "toll"})
 
     def _valid_targets(self, seat: int, effect: str) -> list[int] | None:
         """Seats a targeting card may hit, or None if the card isn't targeted. [] means
