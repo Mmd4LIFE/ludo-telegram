@@ -5,7 +5,7 @@ rule still holds here: ``telegram_id`` never leaves the server, not even for an 
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 import sqlalchemy as sa
@@ -15,8 +15,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import require_admin
 from app.database import Base, get_session
-from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate, Poll
+from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate, Poll, AppConfig
 from app.models import ChatMessage as ChatRow
+from app import appconfig
 from app.schemas import (
     AddPollTemplateRequest,
     AddReactionRequest,
@@ -24,10 +25,12 @@ from app.schemas import (
     AdminChatSeat,
     AdminChatView,
     AdminKnockRow,
+    AppConfigOut,
     AdminStats,
     AdminUser,
     PollTemplateOut,
     ReactionEmojiOut,
+    SetConfigRequest,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -163,6 +166,72 @@ async def remove_reaction(
         await session.delete(row)
         await session.commit()
     return await list_reactions(_admin=_admin, session=session)
+
+
+# --- app config (append-only) -----------------------------------------------
+async def _configs_out(session: AsyncSession) -> list[AppConfigOut]:
+    values = await appconfig.current_values(session)
+    # which keys currently have a live override row?
+    live = (
+        await session.execute(
+            select(AppConfig.key).where(AppConfig.deleted_at.is_(None)).distinct()
+        )
+    ).scalars().all()
+    live_set = set(live)
+    return [
+        AppConfigOut(
+            key=k, label=m["label"], help=m.get("help", ""),
+            value=values[k], default=int(m["default"]), min=m["min"], max=m["max"],
+            is_set=k in live_set,
+        )
+        for k, m in appconfig.TUNABLE.items()
+    ]
+
+
+@router.get("/configs", response_model=list[AppConfigOut])
+async def list_configs(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await _configs_out(session)
+
+
+@router.post("/configs/{key}", response_model=list[AppConfigOut])
+async def set_config(
+    key: str,
+    body: SetConfigRequest,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Change a config by INSERTING a new row (the table is append-only)."""
+    meta = appconfig.TUNABLE.get(key)
+    if meta is None:
+        raise HTTPException(404, "Unknown config key")
+    if not (meta["min"] <= body.value <= meta["max"]):
+        raise HTTPException(400, f"Value must be between {meta['min']} and {meta['max']}")
+    session.add(AppConfig(key=key, value=str(body.value)))
+    await session.commit()
+    return await _configs_out(session)
+
+
+@router.delete("/configs/{key}", response_model=list[AppConfigOut])
+async def reset_config(
+    key: str,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Revert a config to its code default by soft-deleting its live override rows."""
+    if key not in appconfig.TUNABLE:
+        raise HTTPException(404, "Unknown config key")
+    rows = (
+        await session.execute(
+            select(AppConfig).where(AppConfig.key == key, AppConfig.deleted_at.is_(None))
+        )
+    ).scalars().all()
+    for row in rows:
+        row.deleted_at = datetime.now(timezone.utc)
+    await session.commit()
+    return await _configs_out(session)
 
 
 # --- instant-poll templates -------------------------------------------------

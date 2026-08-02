@@ -3,6 +3,11 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.6.2 — Admin config
+- Admins get a Config tab to tune game settings — missed-knocks-per-card, turn timer,
+  auto-kick threshold and card-pick time — applied to new games. Every change is kept as
+  a new entry (full history), and any setting can be reset to its default.
+
 ## 0.6.1 — Could've meter → bonus card
 - Each player now has a "could've" meter on their seat that fills as they pass up knocks.
 - Fill it to 3 missed knocks and you earn a fantasy-card draw — with a ring that fills, a

@@ -147,6 +147,17 @@ export interface AdminReaction {
   position: number;
 }
 
+export interface AppConfig {
+  key: string;
+  label: string;
+  help: string;
+  value: number;
+  default: number;
+  min: number;
+  max: number;
+  is_set: boolean;
+}
+
 export interface AdminChatSeat {
   seat_index: number;
   color: string;
@@ -309,6 +320,11 @@ export const api = {
     req<AdminReaction[]>("DELETE", `/api/admin/reactions/${id}`),
   adminMatchChat: (ref: string) =>
     req<AdminChatView>("GET", `/api/admin/matches/${encodeURIComponent(ref)}/chat`),
+  adminConfigs: () => req<AppConfig[]>("GET", "/api/admin/configs"),
+  adminSetConfig: (key: string, value: number) =>
+    req<AppConfig[]>("POST", `/api/admin/configs/${key}`, { value }),
+  adminResetConfig: (key: string) =>
+    req<AppConfig[]>("DELETE", `/api/admin/configs/${key}`),
   adminPollTemplates: () => req<PollTemplate[]>("GET", "/api/admin/poll-templates"),
   adminAddPollTemplate: (question: string, options: string[], trigger: string) =>
     req<PollTemplate[]>("POST", "/api/admin/poll-templates", { question, options, trigger }),

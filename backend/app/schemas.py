@@ -137,6 +137,21 @@ class AdminChatView(BaseModel):
     messages: list[AdminChatEntry] = []
 
 
+class AppConfigOut(BaseModel):
+    key: str
+    label: str
+    help: str = ""
+    value: int          # current effective value
+    default: int
+    min: int
+    max: int
+    is_set: bool = False   # true when overridden from the code default
+
+
+class SetConfigRequest(BaseModel):
+    value: int
+
+
 class AdminStats(BaseModel):
     users: int
     users_started: int

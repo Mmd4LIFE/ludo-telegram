@@ -61,6 +61,7 @@ import {
   AdminChatView,
   AdminChatSeat,
   AdminKnockRow,
+  AppConfig,
   KnockEvent,
   ChatMessage,
   REACTIONS,
@@ -2513,7 +2514,7 @@ function ProfileStat({ label, value }: { label: string; value: number | string }
 
 /* ---------------------------------------------------------------- admin */
 
-const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions", "polls"] as const;
+const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions", "polls", "config"] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
 const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   overview: "Overview",
@@ -2522,6 +2523,7 @@ const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   knocks: "Knocks",
   reactions: "Reactions",
   polls: "Polls",
+  config: "Config",
 };
 
 function AdminPanel({ onBack }: { onBack: () => void }) {
@@ -2599,6 +2601,7 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
       {tab === "knocks" && <KnockLeaderboard />}
       {tab === "reactions" && <ReactionManager />}
       {tab === "polls" && <PollManager />}
+      {tab === "config" && <ConfigManager />}
 
       {tab === "overview" && (
       <>
@@ -2837,6 +2840,95 @@ function KnockLeaderboard() {
           </table>
         </div>
       )}
+    </Card>
+  );
+}
+
+/* -------------------------------------------------- admin: app config */
+
+function ConfigManager() {
+  const [rows, setRows] = useState<AppConfig[]>([]);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = (list: AppConfig[]) => {
+    setRows(list);
+    setDraft(Object.fromEntries(list.map((c) => [c.key, String(c.value)])));
+  };
+  useEffect(() => {
+    api.adminConfigs().then(load).catch((e) => setErr(String(e)));
+  }, []);
+
+  const save = async (c: AppConfig) => {
+    const v = parseInt(draft[c.key] ?? "", 10);
+    if (Number.isNaN(v)) return;
+    setErr(null);
+    try {
+      load(await api.adminSetConfig(c.key, v));
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+  const reset = async (c: AppConfig) => {
+    setErr(null);
+    try {
+      load(await api.adminResetConfig(c.key));
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  return (
+    <Card>
+      <SectionLabel>App config</SectionLabel>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Changes are saved as new entries (nothing is overwritten) and apply to new games.
+      </p>
+      {err && <div className="mt-2 text-xs text-red">{err}</div>}
+
+      <div className="mt-3 flex flex-col gap-3">
+        {rows.map((c) => (
+          <div key={c.key} className="rounded-2xl bg-secondary/50 p-3 ring-1 ring-white/10">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-bold">{c.label}</span>
+              {c.is_set ? (
+                <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-primary">custom</span>
+              ) : (
+                <span className="text-[10px] text-muted-foreground">default {c.default}</span>
+              )}
+            </div>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{c.help}</p>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="number"
+                min={c.min}
+                max={c.max}
+                value={draft[c.key] ?? ""}
+                onChange={(e) => setDraft((d) => ({ ...d, [c.key]: e.target.value }))}
+                className="w-20 rounded-xl bg-secondary px-3 py-2 text-sm tabular-nums outline-none ring-1 ring-white/10 focus:ring-primary/50"
+              />
+              <span className="text-[10px] text-muted-foreground">
+                {c.min}–{c.max}
+              </span>
+              <div className="ml-auto flex gap-1.5">
+                {c.is_set && (
+                  <Button variant="secondary" size="sm" onClick={() => reset(c)}>
+                    Reset
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  disabled={String(c.value) === (draft[c.key] ?? "")}
+                  onClick={() => save(c)}
+                >
+                  <Check className="size-4" /> Save
+                </Button>
+              </div>
+            </div>
+          </div>
+        ))}
+        {rows.length === 0 && !err && <div className="text-xs text-muted-foreground">Loading…</div>}
+      </div>
     </Card>
   );
 }

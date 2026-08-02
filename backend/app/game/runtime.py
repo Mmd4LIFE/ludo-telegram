@@ -44,6 +44,7 @@ from app.ludo import (
 from app.ludo.board import BASE, HOME, TOKENS_PER_PLAYER, Color
 from app.ludo.bots import choose_move
 from app.ludo.rules import _captures_at
+from app.appconfig import runtime_config, TUNABLE
 from app.game.connection import hub
 from app.models import Match, MatchStatus, DiceRoll, Knockout, Card, CardDraw
 from sqlalchemy import insert, select
@@ -111,6 +112,8 @@ class MatchRuntime:
         self.buf_cards: list[dict] = []
         # the in-progress fantasy-card draw, surfaced to the client (None when idle)
         self._card: dict | None = None
+        # admin-tunable config snapshot — defaults now, refreshed from the DB in _run()
+        self.cfg: dict[str, int] = {k: int(m["default"]) for k, m in TUNABLE.items()}
         # (seat, effect) of each card played this game — for Mirror (copy an opponent's)
         self._recent_cards: list[tuple[int, str]] = []
         self.stat_coins: dict[int, int] = {}   # uid -> bonus coins to grant (Jackpot)
@@ -177,6 +180,11 @@ class MatchRuntime:
     # ---- the driver -------------------------------------------------------
     async def _run(self) -> None:
         try:
+            # snapshot admin-tunable config once for this match's lifetime
+            try:
+                self.cfg = await runtime_config()
+            except Exception:  # noqa: BLE001 — fall back to defaults if the store is unreachable
+                logger.exception("could not load runtime config for %s; using defaults", self.code)
             await self._broadcast()
             while self.state.phase is not Phase.FINISHED:
                 # A human match with nobody watching shouldn't keep grinding through
@@ -207,9 +215,9 @@ class MatchRuntime:
 
         if self.state.phase is Phase.ROLL:
             if not bot_seat:
-                self._deadline = time.time() + settings.TURN_TIMEOUT_SECONDS
+                self._deadline = time.time() + self.cfg["TURN_TIMEOUT_SECONDS"]
                 await self._broadcast()  # push the countdown to the client
-                got = await self._drain_for(seat, "roll", settings.TURN_TIMEOUT_SECONDS)
+                got = await self._drain_for(seat, "roll", self.cfg["TURN_TIMEOUT_SECONDS"])
                 self._deadline = None
                 if got is None:
                     self.seat_missed[seat] = self.seat_missed.get(seat, 0) + 1
@@ -217,7 +225,7 @@ class MatchRuntime:
                         "seat %s timed out on roll (%s), missed=%d",
                         seat, self.code, self.seat_missed[seat],
                     )
-                    if self.seat_missed[seat] >= settings.MAX_MISSED_TURNS:
+                    if self.seat_missed[seat] >= self.cfg["MAX_MISSED_TURNS"]:
                         await self._kick(seat)
                 else:
                     self.seat_missed[seat] = 0
@@ -256,9 +264,9 @@ class MatchRuntime:
 
             chosen = None
             if not bot_seat:
-                self._deadline = time.time() + settings.TURN_TIMEOUT_SECONDS
+                self._deadline = time.time() + self.cfg["TURN_TIMEOUT_SECONDS"]
                 await self._broadcast()  # push the countdown to the client
-                got = await self._drain_for(seat, "move", settings.TURN_TIMEOUT_SECONDS)
+                got = await self._drain_for(seat, "move", self.cfg["TURN_TIMEOUT_SECONDS"])
                 self._deadline = None
                 if got is not None:
                     idx = got.get("token_index")
@@ -302,7 +310,7 @@ class MatchRuntime:
                         "taken": False,
                     })
                 # every 3rd could've in a game earns a card draw
-                due = self.game_potential[seat] // settings.COULDVE_PER_CARD
+                due = self.game_potential[seat] // self.cfg["COULDVE_PER_CARD"]
                 if due > self.pot_reward.get(seat, 0):
                     self.pot_reward[seat] = due
                     couldve_due = True
@@ -347,9 +355,9 @@ class MatchRuntime:
         options = self._rng.sample(ids, 4)
 
         self._card = {"seat": seat, "stage": "pick", "reason": reason}   # ids withheld until reveal
-        self._deadline = time.time() + settings.CARD_PICK_SECONDS
+        self._deadline = time.time() + self.cfg["CARD_PICK_SECONDS"]
         await self._broadcast()
-        got = await self._drain_for(seat, "pick_card", settings.CARD_PICK_SECONDS)
+        got = await self._drain_for(seat, "pick_card", self.cfg["CARD_PICK_SECONDS"])
         self._deadline = None
 
         if got is not None:
@@ -379,9 +387,9 @@ class MatchRuntime:
                     "seat": seat, "stage": "target", "options": options,
                     "picked": idx, "targets": targets, "reason": reason,
                 }
-                self._deadline = time.time() + settings.CARD_PICK_SECONDS
+                self._deadline = time.time() + self.cfg["CARD_PICK_SECONDS"]
                 await self._broadcast()
-                got = await self._drain_for(seat, "pick_target", settings.CARD_PICK_SECONDS)
+                got = await self._drain_for(seat, "pick_target", self.cfg["CARD_PICK_SECONDS"])
                 self._deadline = None
                 chosen = None
                 if got is not None:
@@ -628,7 +636,7 @@ class MatchRuntime:
             # turn clock: client shows a countdown from `now` to `deadline` (unix secs)
             "deadline": self._deadline,
             "now": time.time(),
-            "turn_seconds": settings.TURN_TIMEOUT_SECONDS,
+            "turn_seconds": self.cfg["TURN_TIMEOUT_SECONDS"],
         }
 
     async def _broadcast(self) -> None:
