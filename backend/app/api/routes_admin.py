@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import require_admin
 from app.database import Base, get_session
-from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate
+from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate, Poll
 from app.models import ChatMessage as ChatRow
 from app.schemas import (
     AddPollTemplateRequest,
@@ -209,6 +209,11 @@ async def remove_poll_template(
 ):
     row = await session.get(PollTemplate, tmpl_id)
     if row is not None:
+        # polls created from this template keep their own question/options; just detach
+        # them so the FK doesn't block the delete.
+        await session.execute(
+            sa.update(Poll).where(Poll.template_id == tmpl_id).values(template_id=None)
+        )
         await session.delete(row)
         await session.commit()
     return await list_poll_templates(_admin=_admin, session=session)
