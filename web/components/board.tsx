@@ -8,7 +8,7 @@
 // so captures read correctly. The whole board is rotated k·90° about its centre so the
 // viewer's yard is at the bottom; safe-square stars are SVG polygons kept upright.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GameState, LegalMove } from "@/lib/ws";
 import { PIPS, skinOf } from "@/lib/skins";
 
@@ -141,6 +141,7 @@ export default function Board({
   seatDice,
   seatSkins,
   seatUser,
+  seatPotential,
   removedSeats,
   clock,
   onMove,
@@ -155,6 +156,7 @@ export default function Board({
   seatDice: Record<string, number>;
   seatSkins: Record<string, string>;
   seatUser?: Record<string, number | null>;
+  seatPotential?: Record<string, number>;
   removedSeats: number[];
   clock: { deadline: number | null; now: number; recvAt: number; turnSeconds: number } | null;
   onMove: (tokenIndex: number) => void;
@@ -427,6 +429,9 @@ export default function Board({
           };
           const [nx, ny] = un(0, r + CELL * 0.52);
           const [lx, ly] = un(-r * 0.72, -r * 0.72);
+          const [gx, gy] = un(r * 0.72, -r * 0.72);
+          const isHuman = (seatUser?.[String(seat)] ?? null) != null;
+          const couldve = seatPotential?.[String(seat)] ?? 0;
           // the die sits in the corner of the yard facing the middle of the board
           const dx = Math.sign(MID - cx) || 1;
           const dy = Math.sign(MID - cy) || 1;
@@ -493,6 +498,11 @@ export default function Board({
               </g>
               )}
 
+              {/* could've meter — fills toward 3 missed knocks, then pays a card */}
+              {!gone && isHuman && (
+                <CouldveMeter x={cx + gx} y={cy + gy} R={CELL * 0.34} rot={rot} count={couldve} />
+              )}
+
               {/* active fantasy-card buffs, shown as small chips below the name */}
               {!gone && (shielded.has(seat) || frozen.has(seat) || doubled.has(seat)) && (
                 (() => {
@@ -529,6 +539,75 @@ export default function Board({
 
 /** The current player's clock, drawn as a ring that empties around their home. Owns its
  *  own ticking state so the rest of the board never re-renders on the timer. */
+/** Per-seat "could've" meter: a ring that fills toward 3 missed knocks. It pops when the
+ *  count changes and flashes an animated checkmark each time it completes a set of 3 (the
+ *  moment that pays out a fantasy card). */
+function CouldveMeter({ x, y, R, rot, count }: { x: number; y: number; R: number; rot: number; count: number }) {
+  const [flash, setFlash] = useState(false);
+  const [bump, setBump] = useState(false);
+  const prev = useRef(count);
+  useEffect(() => {
+    if (count > prev.current) {
+      setBump(true);
+      const timers: ReturnType<typeof setTimeout>[] = [setTimeout(() => setBump(false), 260)];
+      if (count % 3 === 0) {
+        setFlash(true);
+        timers.push(setTimeout(() => setFlash(false), 1500));
+      }
+      prev.current = count;
+      return () => timers.forEach(clearTimeout);
+    }
+    prev.current = count;
+  }, [count]);
+
+  const progress = flash ? 1 : (count % 3) / 3;
+  const C = 2 * Math.PI * R;
+  const accent = flash ? "#3fa66a" : "#e0a44a";
+  const check = `M ${x - R * 0.42} ${y + R * 0.02} L ${x - R * 0.08} ${y + R * 0.36} L ${x + R * 0.46} ${y - R * 0.34}`;
+
+  return (
+    <g
+      style={{
+        transformOrigin: `${x}px ${y}px`,
+        transform: `rotate(${-rot}deg) scale(${bump ? 1.24 : 1})`,
+        transition: "transform 0.18s ease-out",
+      }}
+    >
+      <circle cx={x} cy={y} r={R} fill="#141a27" stroke="#2b3346" strokeWidth={1.5} />
+      <circle
+        cx={x}
+        cy={y}
+        r={R}
+        fill="none"
+        stroke={accent}
+        strokeWidth={2.6}
+        strokeLinecap="round"
+        strokeDasharray={C}
+        strokeDashoffset={C * (1 - progress)}
+        transform={`rotate(-90 ${x} ${y})`}
+        style={{ transition: "stroke-dashoffset 0.5s ease, stroke 0.3s" }}
+      />
+      {flash ? (
+        <path d={check} fill="none" stroke="#3fa66a" strokeWidth={R * 0.28} strokeLinecap="round" strokeLinejoin="round">
+          <animate attributeName="stroke-dasharray" values="0 40; 40 0" dur="0.35s" fill="freeze" />
+        </path>
+      ) : (
+        <text
+          x={x}
+          y={y}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize={R * 1.05}
+          fontWeight={800}
+          fill={accent}
+        >
+          {count}
+        </text>
+      )}
+    </g>
+  );
+}
+
 function TurnRing({
   cx,
   cy,

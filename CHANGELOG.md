@@ -3,6 +3,12 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.6.1 — Could've meter → bonus card
+- Each player now has a "could've" meter on their seat that fills as they pass up knocks.
+- Fill it to 3 missed knocks and you earn a fantasy-card draw — with a ring that fills, a
+  pop when it changes, and a checkmark flash when it pays out.
+- The draw clearly shows it was earned from 3 missed knocks, so the whole table knows why.
+
 ## 0.6.0 — Ask the table: polls in chat
 - When you're about to knock a rival, you can now drop a quick poll in chat — "Should I
   knock it? Yes / No" — and everyone votes live.

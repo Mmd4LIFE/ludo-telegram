@@ -36,6 +36,7 @@ export interface CardDraw {
   picked?: number; // chosen index — present from the reveal stage on
   targets?: number[]; // seats the drawer may target (stage "target")
   target?: number | null; // the seat actually hit (stage "result")
+  reason?: string; // why the card was drawn: "home" | "couldve"
 }
 
 export interface LegalMove {

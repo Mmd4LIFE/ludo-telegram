@@ -1624,6 +1624,7 @@ function LiveMatch({
           seatSkins={seatSkins}
           seatDice={seatDice}
           seatUser={seatUser}
+          seatPotential={gameStats.potential}
           removedSeats={removedSeats}
           clock={clock}
           onMove={(ti) => {
@@ -1805,11 +1806,32 @@ function ChanceBox({
     onTarget(s);
   };
 
+  const couldve = card.reason === "couldve";
+  const reasonText = couldve
+    ? mine
+      ? "3 missed knocks — bonus card!"
+      : `${drawerName} passed up 3 knocks`
+    : mine
+      ? "You brought a piece home"
+      : `${drawerName} brought a piece home`;
+
   let title = "";
   if (stage === "pick") title = mine ? "Your prize" : `${drawerName} is drawing`;
   else if (stage === "reveal") title = mine ? "You drew" : `${drawerName} drew`;
   else if (stage === "target") title = mine ? "Choose a target" : `${drawerName} is aiming`;
   else title = mine ? "You played" : `${drawerName} played`;
+
+  const reasonChip = (
+    <div
+      className={cn(
+        "mb-4 flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold",
+        couldve ? "bg-[#e0a44a]/20 text-[#e0a44a]" : "bg-primary/15 text-primary"
+      )}
+    >
+      {couldve ? <Target className="size-3.5" /> : <Layers3 className="size-3.5" />}
+      {reasonText}
+    </div>
+  );
 
   // Result: a slim, non-blocking banner so the BOARD stays visible and plays the effect
   // out (a Recall token gliding back, a Swap, a shield appearing) while it's announced.
@@ -1841,6 +1863,7 @@ function ChanceBox({
 
   return (
     <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/75 px-6 backdrop-blur-md">
+      {reasonChip}
       <div className="mb-1 text-center text-xs font-bold uppercase tracking-widest text-primary">{title}</div>
       <div className="mb-5 text-center text-2xl font-extrabold text-white">
         {stage === "pick"

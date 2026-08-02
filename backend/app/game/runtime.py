@@ -103,6 +103,7 @@ class MatchRuntime:
         self.game_dealt: dict[int, int] = {}             # seat -> captures dealt
         self.game_taken: dict[int, int] = {}             # seat -> captures suffered
         self.game_potential: dict[int, int] = {}         # seat -> captures passed up
+        self.pot_reward: dict[int, int] = {}             # seat -> could've-cards already granted
 
         # append-only event rows buffered per step, bulk-inserted in _persist (humans only)
         self.buf_rolls: list[dict] = []
@@ -288,7 +289,8 @@ class MatchRuntime:
                             "attacker_user_id": mover, "attacker_seat": seat,
                             "victim_user_id": victim, "victim_seat": cseat, "taken": True,
                         })
-            elif mover is not None and targets:
+            couldve_due = False
+            if mover is not None and not res.captured and targets:
                 # a capture was legal but the player did something else — potential knocks
                 self.game_potential[seat] = self.game_potential.get(seat, 0) + len(targets)
                 self.stat_potential[mover] = self.stat_potential.get(mover, 0) + len(targets)
@@ -299,6 +301,11 @@ class MatchRuntime:
                         "victim_user_id": self._human_uid(vseat), "victim_seat": vseat,
                         "taken": False,
                     })
+                # every 3rd could've in a game earns a card draw
+                due = self.game_potential[seat] // settings.COULDVE_PER_CARD
+                if due > self.pot_reward.get(seat, 0):
+                    self.pot_reward[seat] = due
+                    couldve_due = True
             await self._broadcast()
             await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
@@ -308,14 +315,21 @@ class MatchRuntime:
                 if self.state.players[seat].all_home():
                     # this was their LAST token — they're done, so a self-buff is wasted.
                     # Only offer disruptive cards (that hit rivals); skip if none apply.
-                    await self._draw_card(seat, turn_no, pool=self._OFFENSIVE)
+                    await self._draw_card(seat, turn_no, pool=self._OFFENSIVE, reason="home")
                 else:
-                    await self._draw_card(seat, turn_no)
+                    await self._draw_card(seat, turn_no, reason="home")
 
-    async def _draw_card(self, seat: int, turn_no: int, pool: frozenset[str] | None = None) -> None:
+            # …and passing up 3 knocks in a game earns a consolation card draw
+            if couldve_due and self.state.phase is not Phase.FINISHED:
+                await self._draw_card(seat, turn_no, reason="couldve")
+
+    async def _draw_card(
+        self, seat: int, turn_no: int, pool: frozenset[str] | None = None, reason: str = "home"
+    ) -> None:
         """Offer four random cards face-down, wait for the player's pick (auto-pick on
         timeout), reveal them, let them choose a target if needed, then apply + log. When
-        ``pool`` is given, only cards whose effect is in it are offered (finishers)."""
+        ``pool`` is given, only cards whose effect is in it are offered (finishers).
+        ``reason`` ("home" | "couldve") is surfaced so everyone sees why the card was drawn."""
         uid = self._human_uid(seat)
         if uid is None:
             return
@@ -332,7 +346,7 @@ class MatchRuntime:
             return   # not enough eligible cards to offer a proper draw
         options = self._rng.sample(ids, 4)
 
-        self._card = {"seat": seat, "stage": "pick"}   # face-down; ids withheld until reveal
+        self._card = {"seat": seat, "stage": "pick", "reason": reason}   # ids withheld until reveal
         self._deadline = time.time() + settings.CARD_PICK_SECONDS
         await self._broadcast()
         got = await self._drain_for(seat, "pick_card", settings.CARD_PICK_SECONDS)
@@ -350,7 +364,7 @@ class MatchRuntime:
         effect = effects[picked]
 
         # 1) reveal the drawn card to everyone
-        self._card = {"seat": seat, "stage": "reveal", "options": options, "picked": idx}
+        self._card = {"seat": seat, "stage": "reveal", "options": options, "picked": idx, "reason": reason}
         await self._broadcast()
         await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
 
@@ -363,7 +377,7 @@ class MatchRuntime:
             else:
                 self._card = {
                     "seat": seat, "stage": "target", "options": options,
-                    "picked": idx, "targets": targets,
+                    "picked": idx, "targets": targets, "reason": reason,
                 }
                 self._deadline = time.time() + settings.CARD_PICK_SECONDS
                 await self._broadcast()
@@ -383,7 +397,7 @@ class MatchRuntime:
         #    behind the card overlay.
         self._card = {
             "seat": seat, "stage": "result", "options": options,
-            "picked": idx, "target": target,
+            "picked": idx, "target": target, "reason": reason,
         }
         await self._broadcast()
         await asyncio.sleep(settings.CARD_RESULT_DELAY)

@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     CARD_PICK_SECONDS: int = 20             # a player has this long to pick a fantasy card
     CARD_REVEAL_SECONDS: float = 3.5        # hold on the flipped cards after a pick
     CARD_RESULT_DELAY: float = 0.6          # beat before a card's effect plays out on the board
+    COULDVE_PER_CARD: int = 3               # pass up this many knocks in a game → a card draw
     IDLE_SEAT_GRACE_SECONDS: int = 90       # keep a seat this long after disconnect
     JANITOR_INTERVAL_SECONDS: int = 30
 
