@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     routes_admin,
     routes_auth,
+    routes_insights,
     routes_matches,
     routes_profile,
     routes_stats,
@@ -49,7 +50,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (routes_auth, routes_profile, routes_matches, routes_stats, routes_ws, routes_admin):
+for module in (routes_auth, routes_profile, routes_matches, routes_stats, routes_ws, routes_admin, routes_insights):
     app.include_router(module.router)
 
 

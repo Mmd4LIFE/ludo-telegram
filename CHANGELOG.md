@@ -3,6 +3,12 @@
 Player-facing notes. Keep this friendly and free of internal/technical references
 (a lesson from the poker app — no tech-stack or roadmap leaks here).
 
+## 0.6.3 — Insights: ask the data
+- Admins get an Insights tab: ask questions in plain language ("how many matches finished
+  today?", "wins for Nila last week?") and get grounded, read-only answers.
+- Every question shows what was understood (player, date window, capability) and a full
+  pipeline monitor (extract → resolve → run → compose) with timings — all logged.
+
 ## 0.6.2 — Admin config
 - Admins get a Config tab to tune game settings — missed-knocks-per-card, turn timer,
   auto-kick threshold and card-pick time — applied to new games. Every change is kept as

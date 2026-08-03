@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # never sent to the client; all calls are proxied by the backend.
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    # anchor for "today"/"this week" in the Insights assistant (minutes offset from UTC)
+    INSIGHTS_TZ_OFFSET_MINUTES: int = 0
 
     # Database
     POSTGRES_USER: str = "ludo"

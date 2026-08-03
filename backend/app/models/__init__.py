@@ -5,11 +5,12 @@ from app.models.chat import ChatMessage, MessageReaction, ReactionEmoji
 from app.models.event import DiceRoll, Knockout, Card, CardDraw
 from app.models.poll import PollTemplate, Poll, PollOption, PollVote
 from app.models.config import AppConfig
+from app.models.insights import InsightsQuery, InsightsStep
 
 __all__ = [
     "User", "Match", "MatchSeat", "MatchStatus",
     "ChatMessage", "MessageReaction", "ReactionEmoji",
     "DiceRoll", "Knockout", "Card", "CardDraw",
     "PollTemplate", "Poll", "PollOption", "PollVote",
-    "AppConfig",
+    "AppConfig", "InsightsQuery", "InsightsStep",
 ]

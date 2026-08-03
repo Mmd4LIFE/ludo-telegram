@@ -62,6 +62,10 @@ import {
   AdminChatSeat,
   AdminKnockRow,
   AppConfig,
+  InsightAnswer,
+  InsightStep,
+  InsightCapability,
+  InsightLogRow,
   KnockEvent,
   ChatMessage,
   REACTIONS,
@@ -2514,10 +2518,11 @@ function ProfileStat({ label, value }: { label: string; value: number | string }
 
 /* ---------------------------------------------------------------- admin */
 
-const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions", "polls", "config", "ai"] as const;
+const ADMIN_TABS = ["overview", "insights", "data", "chats", "knocks", "reactions", "polls", "config", "ai"] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
 const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   overview: "Overview",
+  insights: "Insights",
   data: "Data",
   chats: "Chats",
   knocks: "Knocks",
@@ -2604,6 +2609,7 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
       {tab === "polls" && <PollManager />}
       {tab === "config" && <ConfigManager />}
       {tab === "ai" && <AiChatPanel />}
+      {tab === "insights" && <InsightsPanel />}
 
       {tab === "overview" && (
       <>
@@ -2843,6 +2849,231 @@ function KnockLeaderboard() {
         </div>
       )}
     </Card>
+  );
+}
+
+/* -------------------------------------------------- admin: insights assistant */
+
+const STEP_STATUS_COLOR: Record<string, string> = {
+  ok: "#3fa66a",
+  clarify: "#e0a44a",
+  skip: "#7c8698",
+  error: "#d76a6a",
+};
+const STATUS_COLOR: Record<string, string> = {
+  answered: "#3fa66a",
+  clarified: "#e0a44a",
+  refused: "#d76a6a",
+  error: "#d76a6a",
+};
+
+function FlowMonitor({ steps }: { steps: InsightStep[] }) {
+  const [open, setOpen] = useState<number | null>(null);
+  return (
+    <div className="flex flex-col gap-1">
+      {steps.map((s) => (
+        <div key={s.seq} className="rounded-lg bg-black/20 ring-1 ring-white/5">
+          <button
+            onClick={() => setOpen(open === s.seq ? null : s.seq)}
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
+          >
+            <span className="size-2 shrink-0 rounded-full" style={{ background: STEP_STATUS_COLOR[s.status] ?? "#7c8698" }} />
+            <span className="font-mono text-[11px] font-bold">{s.stage}</span>
+            <span className="text-[10px] uppercase text-muted-foreground">{s.status}</span>
+            <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{s.duration_ms}ms</span>
+            <ChevronDown className={cn("size-3 text-muted-foreground transition-transform", open === s.seq && "rotate-180")} />
+          </button>
+          {open === s.seq && (
+            <pre className="max-h-48 overflow-auto border-t border-white/5 px-2.5 py-2 text-[10px] leading-relaxed text-muted-foreground">
+              {JSON.stringify(s.detail, null, 2)}
+            </pre>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InsightsPanel() {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [resp, setResp] = useState<InsightAnswer | null>(null);
+  const [caps, setCaps] = useState<InsightCapability[]>([]);
+  const [log, setLog] = useState<InsightLogRow[]>([]);
+  const [showUnderstood, setShowUnderstood] = useState(true);
+
+  const refreshLog = () => api.adminInsightsLog(20).then(setLog).catch(() => {});
+  useEffect(() => {
+    api.adminInsightsCapabilities().then(setCaps).catch(() => {});
+    refreshLog();
+  }, []);
+
+  const ask = async (question: string) => {
+    const text = question.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setResp(null);
+    try {
+      haptic("light");
+      setResp(await api.adminInsightsAsk(text));
+      refreshLog();
+    } catch {
+      /* ignore — errors are captured server-side too */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const suggestions = [
+    "How many users do we have?",
+    "How many matches finished today?",
+    "How many card draws yesterday?",
+    "Top 5 players by knockouts",
+  ];
+
+  const u = resp?.understood;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Card>
+        <div className="flex items-center gap-2">
+          <Sparkles className="size-5 text-primary" />
+          <SectionLabel>Ask the data</SectionLabel>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Natural-language analytics — grounded, read-only, and fully logged.
+        </p>
+
+        <div className="mt-3 flex gap-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && ask(q)}
+            placeholder="e.g. how many wins does Nila have last week?"
+            className="min-w-0 flex-1 rounded-xl bg-secondary px-3 py-2 text-sm outline-none ring-1 ring-white/10 focus:ring-primary/50"
+          />
+          <Button onClick={() => ask(q)} disabled={busy || !q.trim()}>
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+          </Button>
+        </div>
+
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {suggestions.map((s) => (
+            <button
+              key={s}
+              onClick={() => { setQ(s); ask(s); }}
+              className="rounded-full bg-secondary px-2.5 py-1 text-[11px] text-muted-foreground ring-1 ring-white/10 active:scale-95"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      {resp && (
+        <Card>
+          <div className="flex items-center gap-2">
+            <span
+              className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+              style={{ color: STATUS_COLOR[resp.status] ?? "#7c8698", background: (STATUS_COLOR[resp.status] ?? "#7c8698") + "22" }}
+            >
+              {resp.status}
+            </span>
+            <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
+              {resp.latency_ms}ms · {resp.model || "—"}
+            </span>
+          </div>
+          <div className="mt-2 text-base font-bold leading-snug">{resp.answer}</div>
+
+          {resp.candidates.length > 0 && (
+            <div className="mt-3">
+              <SectionLabel>Which player?</SectionLabel>
+              <div className="mt-1.5 flex flex-col gap-1">
+                {resp.candidates.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => ask(`${q || resp.understood?.metric} for ${c.name} #${c.id}`)}
+                    className="flex items-center gap-2 rounded-lg bg-secondary/60 px-3 py-1.5 text-left text-sm"
+                  >
+                    <span className="font-semibold">{c.name}</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      #{c.id}{c.username ? ` · @${c.username}` : ""} · L{c.level} · {c.games_won}W
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {u && u.metric && (
+            <div className="mt-3">
+              <button
+                onClick={() => setShowUnderstood((v) => !v)}
+                className="flex w-full items-center gap-1.5 text-xs font-semibold text-muted-foreground"
+              >
+                <ChevronDown className={cn("size-3.5 transition-transform", !showUnderstood && "-rotate-90")} />
+                What I understood
+              </button>
+              {showUnderstood && (
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5 text-[11px]">
+                  <Understood k="Metric" v={u.metric} />
+                  <Understood k="Capability" v={u.capability} />
+                  {u.entity && <Understood k="Player" v={`${u.entity.name} #${u.entity.id}`} />}
+                  <Understood k="Window" v={u.period_label} />
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mt-3">
+            <SectionLabel>Pipeline</SectionLabel>
+            <div className="mt-1.5">
+              <FlowMonitor steps={resp.steps} />
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <Card>
+        <div className="flex items-center justify-between">
+          <SectionLabel>Recent questions</SectionLabel>
+          <button onClick={refreshLog} className="text-[11px] text-muted-foreground">Refresh</button>
+        </div>
+        <div className="mt-2 flex flex-col gap-1">
+          {log.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => api.adminInsightsQuery(r.id).then((d) => setResp({
+                query_id: r.id, status: r.status, answer: r.answer,
+                understood: {
+                  metric: (d.query.metric as string) ?? undefined,
+                  capability: (d.query.capability as string) ?? undefined,
+                  params: (d.query.params as Record<string, unknown>) ?? undefined,
+                  entity: null, period_label: undefined,
+                },
+                result: (d.query.result as Record<string, unknown>) ?? null,
+                candidates: [], steps: d.steps, model: r.model, latency_ms: r.latency_ms,
+              })).catch(() => {})}
+              className="flex items-center gap-2 rounded-lg bg-secondary/40 px-2.5 py-1.5 text-left"
+            >
+              <span className="size-2 shrink-0 rounded-full" style={{ background: STATUS_COLOR[r.status] ?? "#7c8698" }} />
+              <span className="min-w-0 flex-1 truncate text-xs">{r.question}</span>
+              <span className="text-[10px] tabular-nums text-muted-foreground">{r.latency_ms}ms</span>
+            </button>
+          ))}
+          {log.length === 0 && <div className="text-xs text-muted-foreground">No questions yet.</div>}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function Understood({ k, v }: { k: string; v?: string }) {
+  return (
+    <div className="rounded-lg bg-secondary/50 px-2.5 py-1.5">
+      <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{k}</div>
+      <div className="truncate font-mono text-[11px] font-semibold">{v ?? "—"}</div>
+    </div>
   );
 }
 

@@ -147,6 +147,51 @@ export interface AdminReaction {
   position: number;
 }
 
+export interface InsightStep {
+  seq: number;
+  stage: string;
+  status: string; // ok | skip | error | clarify
+  duration_ms: number;
+  detail: Record<string, unknown>;
+}
+
+export interface InsightAnswer {
+  query_id: number;
+  status: string; // answered | clarified | refused | error
+  answer: string;
+  understood: {
+    metric?: string;
+    capability?: string;
+    params?: Record<string, unknown>;
+    entity?: { id: number; name: string } | null;
+    period_label?: string;
+  };
+  result: Record<string, unknown> | null;
+  candidates: { id: number; name: string; username: string | null; level: number; games_won: number }[];
+  steps: InsightStep[];
+  model: string;
+  latency_ms: number;
+}
+
+export interface InsightCapability {
+  name: string;
+  summary: string;
+  params: Record<string, unknown>;
+  examples: { q: string; call: Record<string, unknown> }[];
+}
+
+export interface InsightLogRow {
+  id: number;
+  question: string;
+  status: string;
+  metric: string | null;
+  capability: string | null;
+  answer: string;
+  latency_ms: number;
+  model: string;
+  created_at: string | null;
+}
+
 export interface AppConfig {
   key: string;
   label: string;
@@ -322,6 +367,14 @@ export const api = {
     req<AdminChatView>("GET", `/api/admin/matches/${encodeURIComponent(ref)}/chat`),
   adminAiChat: (messages: { role: string; content: string }[]) =>
     req<{ reply: string; model: string }>("POST", "/api/admin/ai/chat", { messages }),
+  adminInsightsAsk: (question: string) =>
+    req<InsightAnswer>("POST", "/api/admin/insights/ask", { question }),
+  adminInsightsCapabilities: () =>
+    req<InsightCapability[]>("GET", "/api/admin/insights/capabilities"),
+  adminInsightsLog: (limit = 30) =>
+    req<InsightLogRow[]>("GET", `/api/admin/insights/log?limit=${limit}`),
+  adminInsightsQuery: (id: number) =>
+    req<{ query: Record<string, unknown>; steps: InsightStep[] }>("GET", `/api/admin/insights/queries/${id}`),
   adminConfigs: () => req<AppConfig[]>("GET", "/api/admin/configs"),
   adminSetConfig: (key: string, value: number) =>
     req<AppConfig[]>("POST", `/api/admin/configs/${key}`, { value }),
