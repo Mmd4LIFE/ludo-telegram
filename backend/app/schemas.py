@@ -137,6 +137,20 @@ class AdminChatView(BaseModel):
     messages: list[AdminChatEntry] = []
 
 
+class AiChatMessage(BaseModel):
+    role: str          # "user" | "assistant" | "system"
+    content: str
+
+
+class AiChatRequest(BaseModel):
+    messages: list[AiChatMessage]
+
+
+class AiChatReply(BaseModel):
+    reply: str
+    model: str = ""
+
+
 class AppConfigOut(BaseModel):
     key: str
     label: str

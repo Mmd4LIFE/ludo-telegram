@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-me"
     ADMIN_IDS: str = ""
 
+    # OpenAI (admin-only AI chat panel). Key lives ONLY in the server env / .env — it is
+    # never sent to the client; all calls are proxied by the backend.
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
     # Database
     POSTGRES_USER: str = "ludo"
     POSTGRES_PASSWORD: str = "ludo_secret"

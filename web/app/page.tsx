@@ -2514,7 +2514,7 @@ function ProfileStat({ label, value }: { label: string; value: number | string }
 
 /* ---------------------------------------------------------------- admin */
 
-const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions", "polls", "config"] as const;
+const ADMIN_TABS = ["overview", "data", "chats", "knocks", "reactions", "polls", "config", "ai"] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
 const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   overview: "Overview",
@@ -2524,6 +2524,7 @@ const ADMIN_TAB_LABEL: Record<AdminTab, string> = {
   reactions: "Reactions",
   polls: "Polls",
   config: "Config",
+  ai: "AI",
 };
 
 function AdminPanel({ onBack }: { onBack: () => void }) {
@@ -2602,6 +2603,7 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
       {tab === "reactions" && <ReactionManager />}
       {tab === "polls" && <PollManager />}
       {tab === "config" && <ConfigManager />}
+      {tab === "ai" && <AiChatPanel />}
 
       {tab === "overview" && (
       <>
@@ -2840,6 +2842,98 @@ function KnockLeaderboard() {
           </table>
         </div>
       )}
+    </Card>
+  );
+}
+
+/* -------------------------------------------------- admin: AI chat */
+
+function AiChatPanel() {
+  const [msgs, setMsgs] = useState<{ role: string; content: string }[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs, busy]);
+
+  const send = async () => {
+    const content = draft.trim();
+    if (!content || busy) return;
+    const next = [...msgs, { role: "user", content }];
+    setMsgs(next);
+    setDraft("");
+    setErr(null);
+    setBusy(true);
+    try {
+      const { reply } = await api.adminAiChat(next);
+      setMsgs([...next, { role: "assistant", content: reply }]);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="flex h-[70dvh] flex-col">
+      <div className="flex items-center justify-between">
+        <SectionLabel>AI chat</SectionLabel>
+        {msgs.length > 0 && (
+          <button onClick={() => setMsgs([])} className="text-xs text-muted-foreground">
+            Clear
+          </button>
+        )}
+      </div>
+
+      <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
+        {msgs.length === 0 && !err && (
+          <div className="m-auto max-w-[220px] text-center text-xs text-muted-foreground">
+            Ask anything — this runs on the server-side OpenAI key.
+          </div>
+        )}
+        {msgs.map((m, i) => (
+          <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+            <div
+              className={cn(
+                "max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm",
+                m.role === "user" ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"
+              )}
+            >
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {busy && (
+          <div className="flex justify-start">
+            <div className="rounded-2xl bg-secondary px-3 py-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+            </div>
+          </div>
+        )}
+        {err && <div className="text-xs text-red">{err}</div>}
+        <div ref={endRef} />
+      </div>
+
+      <div className="mt-3 flex items-end gap-2">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          rows={1}
+          placeholder="Message…"
+          className="max-h-28 min-h-[40px] flex-1 resize-none rounded-2xl bg-secondary px-3 py-2 text-sm outline-none ring-1 ring-white/10 focus:ring-primary/50"
+        />
+        <Button onClick={send} disabled={busy || !draft.trim()} aria-label="Send">
+          <Send className="size-4" />
+        </Button>
+      </div>
     </Card>
   );
 }

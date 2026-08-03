@@ -320,6 +320,8 @@ export const api = {
     req<AdminReaction[]>("DELETE", `/api/admin/reactions/${id}`),
   adminMatchChat: (ref: string) =>
     req<AdminChatView>("GET", `/api/admin/matches/${encodeURIComponent(ref)}/chat`),
+  adminAiChat: (messages: { role: string; content: string }[]) =>
+    req<{ reply: string; model: string }>("POST", "/api/admin/ai/chat", { messages }),
   adminConfigs: () => req<AppConfig[]>("GET", "/api/admin/configs"),
   adminSetConfig: (key: string, value: number) =>
     req<AppConfig[]>("POST", `/api/admin/configs/${key}`, { value }),

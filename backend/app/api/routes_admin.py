@@ -13,7 +13,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+import httpx
+
 from app.api.deps import require_admin
+from app.config import settings
 from app.database import Base, get_session
 from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate, Poll, AppConfig
 from app.models import ChatMessage as ChatRow
@@ -21,6 +24,8 @@ from app import appconfig
 from app.schemas import (
     AddPollTemplateRequest,
     AddReactionRequest,
+    AiChatReply,
+    AiChatRequest,
     AdminChatEntry,
     AdminChatSeat,
     AdminChatView,
@@ -166,6 +171,56 @@ async def remove_reaction(
         await session.delete(row)
         await session.commit()
     return await list_reactions(_admin=_admin, session=session)
+
+
+# --- admin AI chat (server-side proxy to OpenAI) ----------------------------
+_OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+_AI_ROLES = {"user", "assistant", "system"}
+
+
+@router.post("/ai/chat", response_model=AiChatReply)
+async def ai_chat(
+    body: AiChatRequest,
+    _admin: User = Depends(require_admin),
+):
+    """Proxy an admin's chat to OpenAI. The API key stays server-side (env/.env) and is
+    never returned to the client."""
+    key = settings.OPENAI_API_KEY
+    if not key:
+        raise HTTPException(400, "OpenAI API key isn't configured on the server")
+
+    msgs = [
+        {"role": m.role if m.role in _AI_ROLES else "user", "content": m.content[:8000]}
+        for m in body.messages[-20:]
+        if m.content.strip()
+    ]
+    if not msgs:
+        raise HTTPException(400, "Nothing to send")
+
+    payload = {"model": settings.OPENAI_MODEL, "messages": msgs}
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                _OPENAI_URL, json=payload,
+                headers={"Authorization": f"Bearer {key}"},
+            )
+    except httpx.HTTPError:
+        raise HTTPException(502, "Couldn't reach OpenAI")
+
+    if resp.status_code != 200:
+        detail = resp.text[:300]
+        try:
+            detail = resp.json().get("error", {}).get("message", detail)
+        except Exception:  # noqa: BLE001
+            pass
+        raise HTTPException(resp.status_code if resp.status_code < 500 else 502, f"OpenAI: {detail}")
+
+    data = resp.json()
+    try:
+        reply = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise HTTPException(502, "Unexpected response from OpenAI")
+    return AiChatReply(reply=reply, model=data.get("model", settings.OPENAI_MODEL))
 
 
 # --- app config (append-only) -----------------------------------------------
