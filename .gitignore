@@ -32,3 +32,6 @@ webout/
 # reference art (not shipped from root)
 image.png
 image copy.png
+
+# docs 
+docs/
