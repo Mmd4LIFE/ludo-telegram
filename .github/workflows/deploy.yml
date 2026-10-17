@@ -1,0 +1,64 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    steps:
+      - name: Download webout artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: webout
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: webout
+
+      - name: Pack webout tarball
+        run: tar czf ludo-webout.tgz -C webout .
+
+      - name: Copy tarball to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          source: ludo-webout.tgz
+          target: /tmp/
+          overwrite: true
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: DEPLOY_PATH
+          script: |
+            set -e
+            cd "$DEPLOY_PATH"
+            git fetch origin main
+            git reset --hard origin/main
+            KEEP_DAYS=7 sh deploy/deploy-web.sh "$DEPLOY_PATH" /tmp/ludo-webout.tgz
+            docker compose up -d --build backend
+            # Read WEB_PORT from .env if set; default 8081
+            WEB_PORT="$(grep -E '^WEB_PORT=' .env 2>/dev/null | cut -d= -f2- || true)"
+            WEB_PORT="${WEB_PORT:-8081}"
+            curl -sf "http://127.0.0.1:${WEB_PORT}/api/health"
+            echo "deploy ok"
