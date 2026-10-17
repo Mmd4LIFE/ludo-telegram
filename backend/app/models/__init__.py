@@ -6,6 +6,7 @@ from app.models.event import DiceRoll, Knockout, Card, CardDraw
 from app.models.poll import PollTemplate, Poll, PollOption, PollVote
 from app.models.config import AppConfig
 from app.models.insights import InsightsQuery, InsightsStep
+from app.models.ledger import Balance, BalanceHistory
 
 __all__ = [
     "User", "Match", "MatchSeat", "MatchStatus",
@@ -13,4 +14,5 @@ __all__ = [
     "DiceRoll", "Knockout", "Card", "CardDraw",
     "PollTemplate", "Poll", "PollOption", "PollVote",
     "AppConfig", "InsightsQuery", "InsightsStep",
+    "Balance", "BalanceHistory",
 ]

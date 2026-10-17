@@ -15,6 +15,8 @@ from app.config import settings
 from app.database import get_session
 from app.ludo.board import Color
 from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, Knockout
+from app.services import ledger
+from app.services.ledger import InsufficientFunds
 from app.models import ChatMessage as ChatRow
 from app.models import PollTemplate, Poll, PollOption, PollVote
 from app.game.manager import manager
@@ -94,6 +96,7 @@ def _summary(m: Match, seats: list[SeatInfo] | None = None) -> MatchSummary:
         is_public=m.is_public,
         entry_fee=m.entry_fee,
         created_by=m.created_by,
+        created_at=m.created_at.isoformat() if m.created_at else None,
         seats=seats or [],
         pending=[PendingJoiner(**p) for p in _PENDING.get(m.code, [])],
     )
@@ -161,6 +164,19 @@ async def create_match(
     session.add(match)
     await session.flush()
 
+    if body.entry_fee:
+        try:
+            await ledger.debit(
+                session,
+                user.id,
+                body.entry_fee,
+                reason="entry_fee",
+                ref_type="match",
+                ref_id=match.id,
+            )
+        except InsufficientFunds as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not enough coins for the entry fee") from e
+
     # seat the creator on RED (seat 0)
     session.add(MatchSeat(
         match_id=match.id, seat_index=0, color=Color.RED.name,
@@ -196,6 +212,17 @@ async def join_match(
     if match.status not in (MatchStatus.WAITING, MatchStatus.PLAYING):
         raise HTTPException(status.HTTP_409_CONFLICT, "Match is not open")
 
+    # 60-minute join deadline for waiting rooms
+    if match.status is MatchStatus.WAITING and match.created_at is not None:
+        created = match.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_h = (datetime.now(timezone.utc) - created).total_seconds() / 3600.0
+        if age_h >= settings.ROOM_IDLE_CLOSE_HOURS:
+            match.status = MatchStatus.ABANDONED
+            await session.flush()
+            raise HTTPException(status.HTTP_409_CONFLICT, "Room expired (60 minute join deadline)")
+
     # already seated?
     for s in match.seats:
         if s.user_id == user.id:
@@ -212,6 +239,21 @@ async def join_match(
     free = next((i for i in range(match.max_players) if i not in taken), None)
     if free is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Match is full")
+
+    if match.entry_fee:
+        try:
+            await ledger.debit(
+                session,
+                user.id,
+                match.entry_fee,
+                reason="entry_fee",
+                ref_type="match",
+                ref_id=match.id,
+            )
+        except InsufficientFunds as e:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "Not enough coins for the entry fee"
+            ) from e
 
     session.add(MatchSeat(
         match_id=match.id, seat_index=free, color=_COLORS[free].name,
@@ -287,6 +329,21 @@ async def accept_joiner(
     free = next((i for i in range(match.max_players) if i not in taken), None)
     if free is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Room is full")
+
+    if match.entry_fee:
+        try:
+            await ledger.debit(
+                session,
+                body.user_id,
+                match.entry_fee,
+                reason="entry_fee",
+                ref_type="match",
+                ref_id=match.id,
+            )
+        except InsufficientFunds as e:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "Joiner cannot afford the entry fee"
+            ) from e
 
     session.add(MatchSeat(
         match_id=match.id, seat_index=free, color=colour,

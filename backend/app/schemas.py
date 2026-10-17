@@ -285,6 +285,7 @@ class MatchSummary(BaseModel):
     is_public: bool
     entry_fee: int
     created_by: int | None = None   # host user id — only the host may start/delete
+    created_at: str | None = None   # ISO — waiting rooms expire 60m after this
     seats: list[SeatInfo] = []
     pending: list[PendingJoiner] = []   # awaiting the host's approval
 

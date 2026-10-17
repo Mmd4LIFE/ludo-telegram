@@ -48,6 +48,8 @@ from app.appconfig import runtime_config, TUNABLE
 from app.game import card_catalog
 from app.game.connection import hub
 from app.models import Match, MatchStatus, DiceRoll, Knockout, CardDraw
+from app.services import ledger
+from app.services.ledger import InsufficientFunds, placement_payout
 from sqlalchemy import insert
 
 logger = logging.getLogger("ludo.runtime")
@@ -124,6 +126,8 @@ class MatchRuntime:
         # (seat, effect) of each card played this game — for Mirror (copy an opponent's)
         self._recent_cards: list[tuple[int, str]] = []
         self.stat_coins: dict[int, int] = {}   # uid -> bonus coins to grant (Jackpot)
+        self.stat_couldve_coins: dict[int, int] = {}  # uid -> PAY_COULDVE accruals
+        self._rerolled_this_turn = False
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -186,8 +190,11 @@ class MatchRuntime:
     def _human_watching(self) -> bool:
         return hub.has_viewers(self.code)
 
-    async def _drain_for(self, seat: int, want: str, timeout: float) -> dict | None:
+    async def _drain_for(
+        self, seat: int, want: str | set[str], timeout: float
+    ) -> dict | None:
         """Wait up to ``timeout`` for a matching action from the seat's human, else None."""
+        wanted = {want} if isinstance(want, str) else set(want)
         deadline = timeout
         try:
             while deadline > 0:
@@ -195,7 +202,7 @@ class MatchRuntime:
                 t0 = loop.time()
                 user_id, msg = await asyncio.wait_for(self._queue.get(), timeout=deadline)
                 deadline -= loop.time() - t0
-                if self.seat_user.get(seat) == user_id and msg.get("type") == want:
+                if self.seat_user.get(seat) == user_id and msg.get("type") in wanted:
                     return msg
                 # ignore stale/foreign input and keep waiting
         except asyncio.TimeoutError:
@@ -238,6 +245,95 @@ class MatchRuntime:
 
     def _has_event_buffers(self) -> bool:
         return bool(self.buf_rolls or self.buf_knocks or self.buf_cards)
+
+    async def _wait_move_or_reroll(self, seat: int):
+        """Accept ``move`` or one paid ``reroll`` during the move window. Returns move or None."""
+        remaining = float(self.cfg["TURN_TIMEOUT_SECONDS"])
+        loop = asyncio.get_event_loop()
+        end = loop.time() + remaining
+        while True:
+            left = end - loop.time()
+            if left <= 0:
+                return None
+            got = await self._drain_for(seat, {"move", "reroll"}, left)
+            if got is None:
+                return None
+            if got.get("type") == "reroll":
+                ok = await self._try_reroll(seat)
+                if not ok:
+                    continue
+                # refresh deadline display after new die
+                self._deadline = end
+                await self._broadcast()
+                continue
+            moves = legal_moves(self.state)
+            idx = got.get("token_index")
+            return next((m for m in moves if m.token_index == idx), None)
+
+    async def _try_reroll(self, seat: int) -> bool:
+        """Debit REROLL_COST and replace the current die. At most once per turn."""
+        if self._rerolled_this_turn or self.state.phase is not Phase.MOVE:
+            return False
+        uid = self._human_uid(seat)
+        if uid is None:
+            return False
+        cost = max(0, int(self.cfg.get("REROLL_COST", 50)))
+        if cost > 0:
+            try:
+                async with SessionLocal() as session:
+                    await ledger.debit(
+                        session,
+                        uid,
+                        cost,
+                        reason="reroll",
+                        ref_type="match",
+                        ref_id=self.match_id,
+                        meta={"seat": seat, "turn": self.state.turn},
+                    )
+                    await session.commit()
+            except InsufficientFunds:
+                await hub.broadcast(
+                    self.code,
+                    {"type": "error", "code": "insufficient_coins", "user_id": uid},
+                )
+                return False
+            except Exception:  # noqa: BLE001
+                logger.exception("reroll debit failed match=%s user=%s", self.code, uid)
+                return False
+
+        # Undo last face from histograms if we recorded it, then apply a fresh roll.
+        old_face = self.state.roll_face
+        if old_face is not None:
+            ghist = self.game_dice.get(seat) or {}
+            if ghist.get(old_face):
+                ghist[old_face] = max(0, ghist[old_face] - 1)
+            if uid in self.stat_dice and self.stat_dice[uid].get(old_face):
+                self.stat_dice[uid][old_face] = max(0, self.stat_dice[uid][old_face] - 1)
+            # drop the last buffered roll for this seat/turn if present
+            for i in range(len(self.buf_rolls) - 1, -1, -1):
+                r = self.buf_rolls[i]
+                if r.get("user_id") == uid and r.get("turn") == self.state.turn:
+                    self.buf_rolls.pop(i)
+                    break
+
+        register_roll(self.state, roll_die(self._rng))
+        if self.state.eff("double", seat) > 0 and self.state.roll_face is not None:
+            # Twin Dice already consumed on the original roll — do not re-consume.
+            pass
+        if self.state.roll_face is not None:
+            face = self.state.roll_face
+            self.seat_last_die[seat] = face
+            ghist = self.game_dice.setdefault(seat, {})
+            ghist[face] = ghist.get(face, 0) + 1
+            hist = self.stat_dice.setdefault(uid, {})
+            hist[face] = hist.get(face, 0) + 1
+            self.buf_rolls.append({
+                "match_id": self.match_id, "user_id": uid, "seat": seat,
+                "value": face, "turn": self.state.turn,
+            })
+        self._rerolled_this_turn = True
+        await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)
+        return True
 
     def _should_persist(self) -> bool:
         """Persist on a cadence, when event buffers grow, or when the game ends."""
@@ -295,6 +391,7 @@ class MatchRuntime:
                         "match_id": self.match_id, "user_id": uid, "seat": seat,
                         "value": face, "turn": self.state.turn,
                     })
+            self._rerolled_this_turn = False
             await self._broadcast()
             await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)  # hold on the die face
             return
@@ -312,11 +409,9 @@ class MatchRuntime:
             if not bot_seat:
                 self._deadline = time.time() + self.cfg["TURN_TIMEOUT_SECONDS"]
                 await self._broadcast()  # push the countdown to the client
-                got = await self._drain_for(seat, "move", self.cfg["TURN_TIMEOUT_SECONDS"])
+                chosen = await self._wait_move_or_reroll(seat)
                 self._deadline = None
-                if got is not None:
-                    idx = got.get("token_index")
-                    chosen = next((m for m in moves if m.token_index == idx), None)
+                moves = legal_moves(self.state)  # may have changed after a paid reroll
             else:
                 await self._think()
             if chosen is None:
@@ -346,8 +441,12 @@ class MatchRuntime:
             couldve_due = False
             if mover is not None and not res.captured and targets:
                 # a capture was legal but the player did something else — potential knocks
-                self.game_potential[seat] = self.game_potential.get(seat, 0) + len(targets)
-                self.stat_potential[mover] = self.stat_potential.get(mover, 0) + len(targets)
+                n = len(targets)
+                self.game_potential[seat] = self.game_potential.get(seat, 0) + n
+                self.stat_potential[mover] = self.stat_potential.get(mover, 0) + n
+                pay = max(0, int(self.cfg.get("PAY_COULDVE", 10))) * n
+                if pay:
+                    self.stat_couldve_coins[mover] = self.stat_couldve_coins.get(mover, 0) + pay
                 for vseat, _tok in targets:
                     self.buf_knocks.append({
                         "match_id": self.match_id, "turn": turn_no,
@@ -676,6 +775,12 @@ class MatchRuntime:
             "deadline": self._deadline,
             "now": time.time(),
             "turn_seconds": self.cfg["TURN_TIMEOUT_SECONDS"],
+            "reroll_cost": int(self.cfg.get("REROLL_COST", 50)),
+            "can_reroll": (
+                self.state.phase is Phase.MOVE
+                and not self._rerolled_this_turn
+                and int(self.cfg.get("REROLL_COST", 50)) >= 0
+            ),
         }
 
     async def _broadcast(self) -> None:
@@ -766,7 +871,7 @@ class MatchRuntime:
         """
         uids = (
             set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
-            | set(self.stat_potential) | set(self.stat_coins)
+            | set(self.stat_potential) | set(self.stat_coins) | set(self.stat_couldve_coins)
         )
         if not uids:
             return
@@ -785,7 +890,23 @@ class MatchRuntime:
             user.captures_taken = (user.captures_taken or 0) + self.stat_taken.get(uid, 0)
             user.potential_knocks = (user.potential_knocks or 0) + self.stat_potential.get(uid, 0)
             if self.stat_coins.get(uid):
-                user.coins = (user.coins or 0) + self.stat_coins[uid]
+                await ledger.credit(
+                    session,
+                    uid,
+                    int(self.stat_coins[uid]),
+                    reason="jackpot_card",
+                    ref_type="match",
+                    ref_id=self.match_id,
+                )
+            if self.stat_couldve_coins.get(uid):
+                await ledger.credit(
+                    session,
+                    uid,
+                    int(self.stat_couldve_coins[uid]),
+                    reason="couldve",
+                    ref_type="match",
+                    ref_id=self.match_id,
+                )
 
         # deltas are now persisted (within this session's pending commit) — reset them so
         # the next flush only applies what's new.
@@ -794,11 +915,13 @@ class MatchRuntime:
         self.stat_taken = {}
         self.stat_potential = {}
         self.stat_coins = {}
+        self.stat_couldve_coins = {}
 
     async def _settle(self) -> None:
-        """Write final placements, pay the pot to the winner, bump stats."""
+        """Write final placements, pay placement rewards via ledger, bump stats."""
         from app.models import User
 
+        human_count = sum(1 for uid in self.seat_user.values() if uid)
         async with SessionLocal() as session:
             m = await session.get(Match, self.match_id)
             if m is None:
@@ -806,7 +929,9 @@ class MatchRuntime:
             m.status = MatchStatus.FINISHED
             m.state = self.state.to_dict()
 
-            pot = self.entry_fee * len(self.seat_user)
+            # Optional entry-fee pot still goes to 1st human when fees were collected.
+            pot = self.entry_fee * human_count if self.entry_fee else 0
+
             for place, seat in enumerate(self.state.ranking, start=1):
                 for s in m.seats:
                     if s.seat_index == seat:
@@ -820,11 +945,29 @@ class MatchRuntime:
                 user.games_played += 1
                 if place == 1:
                     user.games_won += 1
-                    user.coins += pot
                     user.xp += 100
+                    if pot:
+                        await ledger.credit(
+                            session,
+                            uid,
+                            pot,
+                            reason="entry_fee",
+                            ref_type="match",
+                            ref_id=self.match_id,
+                            meta={"kind": "pot_win"},
+                        )
                 else:
                     user.xp += 25
-            # dice/capture deltas were already flushed by the final _persist; nothing to
-            # add here beyond the placement/XP bumps above.
+                pay = placement_payout(self.cfg, place, human_count)
+                if pay:
+                    await ledger.credit(
+                        session,
+                        uid,
+                        pay,
+                        reason="placement",
+                        ref_type="match",
+                        ref_id=self.match_id,
+                        meta={"place": place, "humans": human_count},
+                    )
             await session.commit()
         logger.info("match %s finished, ranking=%s", self.code, self.state.ranking)

@@ -20,6 +20,7 @@ from aiogram.filters import Command
 
 from app.config import settings
 from app.database import SessionLocal
+from app.services import ledger
 from app.services.users import get_or_create_from_telegram
 
 logger = logging.getLogger("ludo.bot")
@@ -61,7 +62,9 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
         )
         if not user.bot_started:
             user.bot_started = True
-            user.coins += settings.BOT_START_BONUS
+            await ledger.credit(
+                session, user.id, settings.BOT_START_BONUS, reason="bot_start"
+            )
         await session.commit()
 
     if room:

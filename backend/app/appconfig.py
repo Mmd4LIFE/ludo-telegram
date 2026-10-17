@@ -36,6 +36,47 @@ TUNABLE: dict[str, dict] = {
         "help": "How long a player has to pick a fantasy card / target.",
         "default": settings.CARD_PICK_SECONDS, "min": 5, "max": 60,
     },
+    # --- economy payouts (coins) -------------------------------------------
+    "PAY_1ST_4": {
+        "label": "1st place (4 humans)",
+        "help": "Coins for finishing 1st when 4 humans played.",
+        "default": 100, "min": 0, "max": 10000,
+    },
+    "PAY_1ST_3": {
+        "label": "1st place (3 humans)",
+        "help": "Coins for finishing 1st when 3 humans played.",
+        "default": 75, "min": 0, "max": 10000,
+    },
+    "PAY_1ST_2": {
+        "label": "1st place (2 humans)",
+        "help": "Coins for finishing 1st when 2 humans played.",
+        "default": 50, "min": 0, "max": 10000,
+    },
+    "PAY_2ND_4": {
+        "label": "2nd place (4 humans)",
+        "help": "Coins for finishing 2nd when 4 humans played.",
+        "default": 75, "min": 0, "max": 10000,
+    },
+    "PAY_2ND_3": {
+        "label": "2nd place (3 humans)",
+        "help": "Coins for finishing 2nd when 3 humans played.",
+        "default": 50, "min": 0, "max": 10000,
+    },
+    "PAY_3RD_4": {
+        "label": "3rd place (4 humans)",
+        "help": "Coins for finishing 3rd when 4 humans played.",
+        "default": 50, "min": 0, "max": 10000,
+    },
+    "PAY_COULDVE": {
+        "label": "Could've pass bonus",
+        "help": "Coins granted each time a player passes up a legal capture.",
+        "default": 10, "min": 0, "max": 1000,
+    },
+    "REROLL_COST": {
+        "label": "Reroll cost",
+        "help": "Coins to re-roll the die once per turn (after reveal, before move).",
+        "default": 50, "min": 0, "max": 10000,
+    },
 }
 
 

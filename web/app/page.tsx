@@ -168,6 +168,8 @@ function Home() {
   const [cardDraw, setCardDraw] = useState<CardDraw | null>(null);
   const [removedSeats, setRemovedSeats] = useState<number[]>([]);
   const [clock, setClock] = useState<Clock | null>(null);
+  const [canReroll, setCanReroll] = useState(false);
+  const [rerollCost, setRerollCost] = useState(50);
   const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
     votes: [],
     humanIds: [],
@@ -209,6 +211,8 @@ function Home() {
           recvAt: Date.now() / 1000,
           turnSeconds: p.turn_seconds,
         });
+        setCanReroll(Boolean(p.can_reroll));
+        setRerollCost(typeof p.reroll_cost === "number" ? p.reroll_cost : 50);
       } else if (msg.type === "rematch") {
         setRematch({
           votes: (msg.votes as number[]) ?? [],
@@ -216,6 +220,11 @@ function Home() {
         });
       } else if (msg.type === "rematch_ready") {
         enterMatch(String(msg.code));
+      } else if (msg.type === "error" && msg.code === "insufficient_coins") {
+        if (msg.user_id === myIdRef.current) {
+          notify("warning");
+          setNotice("Not enough coins to reroll.");
+        }
       } else if (msg.type === "kicked") {
         if (msg.user_id === myIdRef.current) {
           notify("warning");
@@ -338,6 +347,8 @@ function Home() {
         card={cardDraw}
         removedSeats={removedSeats}
         clock={clock}
+        canReroll={canReroll}
+        rerollCost={rerollCost}
         rematch={rematch}
         sock={sockRef.current}
         onLeave={leaveMatch}
@@ -1542,6 +1553,8 @@ function LiveMatch({
   card,
   removedSeats,
   clock,
+  canReroll,
+  rerollCost,
   rematch,
   sock,
   onLeave,
@@ -1559,6 +1572,8 @@ function LiveMatch({
   card: CardDraw | null;
   removedSeats: number[];
   clock: Clock | null;
+  canReroll: boolean;
+  rerollCost: number;
   rematch: { votes: number[]; humanIds: number[] };
   sock: MatchSocket | null;
   onLeave: () => void;
@@ -1683,6 +1698,19 @@ function LiveMatch({
                 sock?.roll();
               }}
             />
+            {myTurn && state.phase === "move" && canReroll && (
+              <button
+                type="button"
+                disabled={profile.coins < rerollCost}
+                onClick={() => {
+                  haptic("medium");
+                  sock?.reroll();
+                }}
+                className="mt-2 h-10 w-full shrink-0 rounded-xl bg-white/5 text-sm font-semibold text-white ring-1 ring-white/10 transition active:translate-y-px disabled:opacity-40"
+              >
+                Reroll · {rerollCost} coins
+              </button>
+            )}
             <p className="mt-1 text-center text-[11px] text-muted-foreground">
               {noMoves
                 ? `No moves for ${currentColor} — passing…`

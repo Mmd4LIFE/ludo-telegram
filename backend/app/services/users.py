@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import User
+from app.services import ledger
 
 
 async def get_or_create_from_telegram(
@@ -28,10 +29,16 @@ async def get_or_create_from_telegram(
         first_name=tg_user.get("first_name") or "Player",
         username=tg_user.get("username"),
         language_code=tg_user.get("language_code"),
-        coins=settings.SIGNUP_BONUS_COINS,
+        coins=0,
     )
     session.add(user)
     await session.flush()
+    await ledger.credit(
+        session,
+        user.id,
+        settings.SIGNUP_BONUS_COINS,
+        reason="signup",
+    )
 
     if referral:
         await _apply_referral(session, user, referral)
@@ -51,5 +58,17 @@ async def _apply_referral(session: AsyncSession, new_user: User, referral: str) 
     if referrer is None or referrer.id == new_user.id:
         return
     new_user.referred_by = referrer.telegram_id
-    new_user.coins += settings.REFERRAL_FRIEND_REWARD
-    referrer.coins += settings.REFERRAL_REFERRER_REWARD
+    await ledger.credit(
+        session,
+        new_user.id,
+        settings.REFERRAL_FRIEND_REWARD,
+        reason="referral",
+        meta={"role": "friend", "referrer_id": referrer.id},
+    )
+    await ledger.credit(
+        session,
+        referrer.id,
+        settings.REFERRAL_REFERRER_REWARD,
+        reason="referral",
+        meta={"role": "referrer", "friend_id": new_user.id},
+    )

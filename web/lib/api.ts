@@ -104,6 +104,7 @@ export interface MatchSummary {
   is_public: boolean;
   entry_fee: number;
   created_by: number | null;
+  created_at?: string | null;
   seats: SeatInfo[];
   pending: PendingJoiner[];
 }
