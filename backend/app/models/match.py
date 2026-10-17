@@ -76,7 +76,9 @@ class MatchSeat(Base, TimestampMixin):
     seat_index: Mapped[int] = mapped_column(Integer)   # 0..3, maps to a board colour
     color: Mapped[str] = mapped_column(String(8))      # RED/GREEN/YELLOW/BLUE
 
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), default=None, index=True
+    )
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
     connected: Mapped[bool] = mapped_column(Boolean, default=False)
     place: Mapped[int | None] = mapped_column(Integer, default=None)  # final placement 1..N

@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.config import settings
 from app.database import get_session
 from app.ludo.board import Color
 from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, Knockout
@@ -132,6 +133,23 @@ async def create_match(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "max_players must be 2..4")
     if body.entry_fee and user.coins < body.entry_fee:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not enough coins for the entry fee")
+
+    active = (
+        await session.execute(
+            select(func.count())
+            .select_from(Match)
+            .where(
+                Match.created_by == user.id,
+                Match.status.in_((MatchStatus.WAITING, MatchStatus.PLAYING)),
+            )
+        )
+    ).scalar_one()
+    if active >= settings.MAX_ACTIVE_ROOMS_PER_USER:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"You already have {active} active rooms "
+            f"(max {settings.MAX_ACTIVE_ROOMS_PER_USER})",
+        )
 
     match = Match(
         max_players=body.max_players,

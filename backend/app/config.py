@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "ludo"
     POSTGRES_HOST: str = "db"
     POSTGRES_PORT: int = 5432
+    # AsyncPG pool — keep small on a shared 1GB box (tunable via env).
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
+    DB_POOL_RECYCLE: int = 1800
+    DB_POOL_TIMEOUT: int = 10
+
+    # Live-match scale caps
+    MAX_VIEWERS_PER_MATCH: int = 16
+    ACTION_QUEUE_MAX: int = 64
+    PERSIST_EVERY_N_STEPS: int = 5
 
     # Economy (coins are a soft currency; identical faucet/sink model to poker)
     SIGNUP_BONUS_COINS: int = 10000

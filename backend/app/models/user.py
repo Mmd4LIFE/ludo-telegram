@@ -46,7 +46,7 @@ class User(Base, TimestampMixin):
     dice_skin: Mapped[str] = mapped_column(String(16), default="classic", server_default="classic")
 
     # flags / presence
-    is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_bot: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     bot_started: Mapped[bool] = mapped_column(Boolean, default=False)  # pressed /start
     last_seen_at: Mapped[datetime | None] = mapped_column(

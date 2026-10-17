@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -89,12 +90,70 @@ class MatchManager:
 
     async def _tick(self) -> None:
         # drop runtimes whose game finished or whose driver task has ended (abandoned)
-        for mid, rt in list(self._runtimes.items()):
+        async with self._lock:
             from app.ludo import Phase
-            if rt.state.phase is Phase.FINISHED or rt.is_done():
+
+            dead: list[tuple[int, MatchRuntime]] = []
+            for mid, rt in list(self._runtimes.items()):
+                if rt.state.phase is Phase.FINISHED or rt.is_done():
+                    dead.append((mid, rt))
+            for mid, rt in dead:
                 await rt.stop()
                 self._runtimes.pop(mid, None)
+
+        await self._close_idle_waiting_rooms()
+        await self._purge_finished_bot_tables()
         await self._ensure_bot_tables()
+
+    async def _close_idle_waiting_rooms(self) -> None:
+        """Abandon WAITING rooms older than ROOM_IDLE_CLOSE_HOURS; clear lobby mem."""
+        hours = settings.ROOM_IDLE_CLOSE_HOURS
+        if hours <= 0:
+            return
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        async with SessionLocal() as session:
+            stale = (
+                await session.execute(
+                    select(Match).where(
+                        Match.status == MatchStatus.WAITING,
+                        Match.created_at < cutoff,
+                    )
+                )
+            ).scalars().all()
+            if not stale:
+                return
+            codes: list[str] = []
+            for m in stale:
+                m.status = MatchStatus.ABANDONED
+                codes.append(m.code)
+            await session.commit()
+        # clear in-process lobby state for those codes
+        try:
+            from app.api import routes_matches as lobby
+
+            for code in codes:
+                lobby._PENDING.pop(code, None)
+                lobby._DICE.pop(code, None)
+        except Exception:  # noqa: BLE001
+            logger.exception("failed clearing lobby state for idle rooms")
+        logger.info("abandoned %d idle waiting rooms", len(codes))
+
+    async def _purge_finished_bot_tables(self) -> None:
+        """Delete finished/abandoned bot-table matches so self-play does not bloat tables."""
+        async with SessionLocal() as session:
+            ids = (
+                await session.execute(
+                    select(Match.id).where(
+                        Match.is_bot_table.is_(True),
+                        Match.status.in_((MatchStatus.FINISHED, MatchStatus.ABANDONED)),
+                    )
+                )
+            ).scalars().all()
+            if not ids:
+                return
+            await session.execute(delete(Match).where(Match.id.in_(ids)))
+            await session.commit()
+            logger.info("purged %d finished bot tables", len(ids))
 
     async def _ensure_bot_tables(self) -> None:
         """Keep ``settings.BOT_TABLES`` self-play matches running."""
@@ -139,8 +198,10 @@ class MatchManager:
     async def shutdown(self) -> None:
         if self._janitor:
             self._janitor.cancel()
-        for rt in list(self._runtimes.values()):
-            await rt.stop()
+        async with self._lock:
+            for rt in list(self._runtimes.values()):
+                await rt.stop()
+            self._runtimes.clear()
 
 
 manager = MatchManager()

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.database import SessionLocal
 from app.models import User
@@ -19,7 +19,9 @@ logger = logging.getLogger("ludo.seed")
 
 async def _seed() -> None:
     async with SessionLocal() as session:
-        count = len((await session.execute(select(User.id))).scalars().all())
+        count = (
+            await session.execute(select(func.count()).select_from(User))
+        ).scalar_one()
         logger.info("seed: %d users present", count)
 
 

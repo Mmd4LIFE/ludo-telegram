@@ -7,13 +7,21 @@ schema, which has no such field.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import Float, Integer, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_session
 from app.models import User, ReactionEmoji, Card, PollTemplate
 from app.schemas import PlayerStats, CardOut, PollTemplateOut
+
+
+def _hist_face(face: int):
+    """JSONB dice_hist face count as an int expression (0 if missing)."""
+    return func.coalesce(
+        cast(User.dice_hist.op("->>")(str(face)), Integer),
+        0,
+    )
 
 router = APIRouter(prefix="/api", tags=["stats"])
 
@@ -74,15 +82,28 @@ async def scoreboard(
     """Players ranked by their average dice output (highest first).
 
     Only real players who have actually rolled appear. Ties break on who has rolled more
-    (a bigger, more trustworthy sample), then on games won.
+    (a bigger, more trustworthy sample), then on games won. Ranking is done in SQL so we
+    never load the full users table.
     """
+    rolls = (
+        _hist_face(1) + _hist_face(2) + _hist_face(3)
+        + _hist_face(4) + _hist_face(5) + _hist_face(6)
+    )
+    weighted = (
+        1 * _hist_face(1) + 2 * _hist_face(2) + 3 * _hist_face(3)
+        + 4 * _hist_face(4) + 5 * _hist_face(5) + 6 * _hist_face(6)
+    )
+    dice_avg = cast(weighted, Float) / cast(func.nullif(rolls, 0), Float)
+
     rows = (
-        await session.execute(select(User).where(User.is_bot.is_(False)))
+        await session.execute(
+            select(User)
+            .where(User.is_bot.is_(False), rolls > 0)
+            .order_by(dice_avg.desc(), rolls.desc(), User.games_won.desc())
+            .limit(limit)
+        )
     ).scalars().all()
-    stats = [PlayerStats.from_user(u) for u in rows]
-    stats = [s for s in stats if s.dice_rolls > 0]
-    stats.sort(key=lambda s: (s.dice_avg, s.dice_rolls, s.games_won), reverse=True)
-    return stats[:limit]
+    return [PlayerStats.from_user(u) for u in rows]
 
 
 @router.get("/users/{user_id}/profile", response_model=PlayerStats)

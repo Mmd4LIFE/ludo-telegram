@@ -45,9 +45,10 @@ from app.ludo.board import BASE, HOME, TOKENS_PER_PLAYER, Color
 from app.ludo.bots import choose_move
 from app.ludo.rules import _captures_at
 from app.appconfig import runtime_config, TUNABLE
+from app.game import card_catalog
 from app.game.connection import hub
-from app.models import Match, MatchStatus, DiceRoll, Knockout, Card, CardDraw
-from sqlalchemy import insert, select
+from app.models import Match, MatchStatus, DiceRoll, Knockout, CardDraw
+from sqlalchemy import insert
 
 logger = logging.getLogger("ludo.runtime")
 
@@ -82,7 +83,9 @@ class MatchRuntime:
             else initial_state(len(match.seats) or 2, seat_colors=self._seat_colors(match))
         )
         self._rng = random.Random(match.id * 1000003)
-        self._queue: asyncio.Queue[tuple[int, dict]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[int, dict]] = asyncio.Queue(
+            maxsize=max(8, settings.ACTION_QUEUE_MAX)
+        )
         self._task: asyncio.Task | None = None
         self._started = False
         # wall-clock deadline for the current human action (unix seconds) — the client
@@ -90,6 +93,10 @@ class MatchRuntime:
         self._deadline: float | None = None
         # user_ids who requested a rematch after the game finished
         self.rematch: set[int] = set()
+        self.rematch_code: str | None = None  # set once when rematch match is created
+        self._rematch_lock = asyncio.Lock()
+        self._steps_since_persist = 0
+        self._persist_dirty = False
 
         # lifetime-stat deltas, flushed to users' totals on every persist (see
         # _flush_stats). Keyed by user_id; only HUMAN seats are counted.
@@ -120,21 +127,39 @@ class MatchRuntime:
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
-        if self._started:
+        if self._started and self._task is not None and not self._task.done():
             return
         self._started = True
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
+        task = self._task
+        self._task = None
+        self._started = False
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     def is_done(self) -> bool:
         return self._task is not None and self._task.done()
 
     def submit(self, user_id: int, msg: dict) -> None:
         """Called by the ws route with a human action ({'type': 'roll'|'move', ...})."""
-        self._queue.put_nowait((user_id, msg))
+        try:
+            self._queue.put_nowait((user_id, msg))
+        except asyncio.QueueFull:
+            # Drop oldest, keep the newest action (coalesce spam under load).
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._queue.put_nowait((user_id, msg))
+            except asyncio.QueueFull:
+                logger.warning("action queue full for match %s; dropping", self.code)
 
     # ---- helpers ----------------------------------------------------------
     @staticmethod
@@ -197,6 +222,12 @@ class MatchRuntime:
                         return
                     continue
                 await self._step()
+                self._steps_since_persist += 1
+                self._persist_dirty = True
+                if self._should_persist():
+                    await self._persist()
+            # final board + stats flush before settle payouts
+            if self._persist_dirty or self._has_event_buffers():
                 await self._persist()
             await self._settle()
             await self._broadcast()
@@ -204,6 +235,21 @@ class MatchRuntime:
             raise
         except Exception:  # noqa: BLE001
             logger.exception("runtime crashed for match %s", self.code)
+
+    def _has_event_buffers(self) -> bool:
+        return bool(self.buf_rolls or self.buf_knocks or self.buf_cards)
+
+    def _should_persist(self) -> bool:
+        """Persist on a cadence, when event buffers grow, or when the game ends."""
+        n = max(1, settings.PERSIST_EVERY_N_STEPS)
+        if self.state.phase is Phase.FINISHED:
+            return True
+        if self._steps_since_persist >= n:
+            return True
+        # keep event inserts from growing unbounded between flushes
+        if len(self.buf_rolls) + len(self.buf_knocks) + len(self.buf_cards) >= 24:
+            return True
+        return False
 
     async def _step(self) -> None:
         seat = self.state.current
@@ -341,14 +387,7 @@ class MatchRuntime:
         uid = self._human_uid(seat)
         if uid is None:
             return
-        # the catalog lives in the DB (seeded by migration) — read the enabled ids + effects
-        async with SessionLocal() as session:
-            rows = (
-                await session.execute(
-                    select(Card.id, Card.effect).where(Card.enabled.is_(True))
-                )
-            ).all()
-        effects = {cid: eff for cid, eff in rows}
+        effects = await card_catalog.enabled_effects()
         ids = [cid for cid in effects if pool is None or effects[cid] in pool]
         if len(ids) < 4:
             return   # not enough eligible cards to offer a proper draw
@@ -660,12 +699,11 @@ class MatchRuntime:
             if self.buf_cards:
                 await session.execute(insert(CardDraw), self.buf_cards)
                 self.buf_cards = []
-            # Fold any dice/capture deltas accumulated since the last persist into the
-            # players' lifetime totals in the SAME commit — this is what makes an in-game
-            # profile card reflect the current game's rolls (rather than only updating when
-            # the whole game ends). _persist runs after every step, so deltas flush promptly.
+            # Fold dice/capture deltas into lifetime totals in the same commit.
             await self._flush_stats(session)
             await session.commit()
+        self._steps_since_persist = 0
+        self._persist_dirty = False
 
     async def _kick(self, seat: int) -> None:
         """A human who keeps missing rolls is REMOVED (not replaced by a bot): their
@@ -689,6 +727,8 @@ class MatchRuntime:
 
     async def _abandon(self) -> None:
         """Mark a viewer-less human match abandoned so it stops using the box."""
+        if self._persist_dirty or self._has_event_buffers():
+            await self._persist()
         async with SessionLocal() as session:
             m = await session.get(Match, self.match_id)
             if m is not None and m.status is not MatchStatus.FINISHED:
@@ -696,6 +736,24 @@ class MatchRuntime:
             await self._flush_stats(session)
             await session.commit()
         logger.info("match %s abandoned (no viewers)", self.code)
+
+    async def claim_rematch(self, user_id: int, create) -> tuple[str | None, list[int], list[int]]:
+        """Record a rematch vote. Returns (ready_code|None, votes, human_ids).
+
+        ``create`` is an async callable ``() -> Match`` used at most once per runtime
+        so concurrent WS rematch messages cannot spawn duplicate matches.
+        """
+        async with self._rematch_lock:
+            human_ids = sorted({uid for uid in self.seat_user.values() if uid})
+            if self.rematch_code:
+                return self.rematch_code, sorted(self.rematch), human_ids
+            self.rematch.add(user_id)
+            votes = sorted(self.rematch)
+            if human_ids and self.rematch.issuperset(set(human_ids)):
+                new_match = await create()
+                self.rematch_code = new_match.code
+                return self.rematch_code, votes, human_ids
+            return None, votes, human_ids
 
     async def _flush_stats(self, session) -> None:
         """Fold the dice + capture deltas accumulated SINCE THE LAST FLUSH into each

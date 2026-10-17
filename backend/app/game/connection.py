@@ -12,6 +12,8 @@ import logging
 
 from fastapi import WebSocket
 
+from app.config import settings
+
 logger = logging.getLogger("ludo.ws")
 
 
@@ -20,10 +22,18 @@ class ConnectionHub:
         self._rooms: dict[str, set[tuple[int, WebSocket]]] = {}
         self._lock = asyncio.Lock()
 
-    async def connect(self, code: str, user_id: int, ws: WebSocket) -> None:
-        await ws.accept()
+    def room_full(self, code: str) -> bool:
+        return len(self._rooms.get(code, ())) >= settings.MAX_VIEWERS_PER_MATCH
+
+    async def connect(self, code: str, user_id: int, ws: WebSocket) -> bool:
+        """Accept and register. Returns False if the room is at the viewer cap."""
         async with self._lock:
-            self._rooms.setdefault(code, set()).add((user_id, ws))
+            conns = self._rooms.setdefault(code, set())
+            if len(conns) >= settings.MAX_VIEWERS_PER_MATCH:
+                return False
+            await ws.accept()
+            conns.add((user_id, ws))
+            return True
 
     async def disconnect(self, code: str, user_id: int, ws: WebSocket) -> None:
         async with self._lock:

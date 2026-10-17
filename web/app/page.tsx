@@ -179,6 +179,8 @@ function Home() {
 
   // ---- live match socket ----
   const enterMatch = useCallback((code: string) => {
+    sockRef.current?.close();
+    sockRef.current = null;
     setRoom(null);
     setMatchCode(code);
     setState(null);
@@ -468,11 +470,19 @@ function Lobby({
   const [tables, setTables] = useState<MatchSummary[]>([]);
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      api
-        .listMatches()
-        .then((t) => alive && setTables(t))
-        .catch(() => {});
+    let inflight = false;
+    const load = async () => {
+      if (inflight) return;
+      inflight = true;
+      try {
+        const t = await api.listMatches();
+        if (alive) setTables(t);
+      } catch {
+        /* ignore */
+      } finally {
+        inflight = false;
+      }
+    };
     load();
     const id = setInterval(load, 4000);
     return () => {
@@ -594,27 +604,34 @@ function WaitingRoom({
   // Poll the room: seats, pending requests, chat, dice — and follow the host in.
   useEffect(() => {
     let alive = true;
+    let inflight = false;
     const load = async () => {
+      if (inflight) return;
+      inflight = true;
       try {
-        const s = await api.getMatch(room.code);
-        if (!alive) return;
-        setSummary(s);
-        if (s.status === "playing") return onEnter(room.code);
-        if (s.status === "abandoned") return onBack();
-      } catch {
-        /* transient */
-      }
-      try {
-        const c = await api.getChat(room.code);
-        if (alive) setChat(c);
-      } catch {
-        /* not in the room yet */
-      }
-      try {
-        const d = await api.getDice(room.code);
-        if (alive) setDice(d);
-      } catch {
-        /* not in the room yet */
+        try {
+          const s = await api.getMatch(room.code);
+          if (!alive) return;
+          setSummary(s);
+          if (s.status === "playing") return onEnter(room.code);
+          if (s.status === "abandoned") return onBack();
+        } catch {
+          /* transient */
+        }
+        try {
+          const c = await api.getChat(room.code);
+          if (alive) setChat(c);
+        } catch {
+          /* not in the room yet */
+        }
+        try {
+          const d = await api.getDice(room.code);
+          if (alive) setDice(d);
+        } catch {
+          /* not in the room yet */
+        }
+      } finally {
+        inflight = false;
       }
     };
     load();
@@ -1033,7 +1050,19 @@ function MatchChat({
   const [pollMenu, setPollMenu] = useState(false);
   useEffect(() => {
     let alive = true;
-    const load = () => api.getChat(code).then((c) => alive && setChat(c)).catch(() => {});
+    let inflight = false;
+    const load = async () => {
+      if (inflight) return;
+      inflight = true;
+      try {
+        const c = await api.getChat(code);
+        if (alive) setChat(c);
+      } catch {
+        /* ignore */
+      } finally {
+        inflight = false;
+      }
+    };
     load();
     api
       .getReactions()

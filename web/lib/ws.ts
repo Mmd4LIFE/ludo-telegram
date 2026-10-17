@@ -71,11 +71,16 @@ export interface StatePayload {
 
 type Handler = (msg: StatePayload | { type: string; [k: string]: unknown }) => void;
 
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_CAP_MS = 30000;
+
 export class MatchSocket {
   private ws: WebSocket | null = null;
   private code: string;
   private onMsg: Handler;
   private closed = false;
+  private attempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(code: string, onMsg: Handler) {
     this.code = code;
@@ -83,12 +88,20 @@ export class MatchSocket {
   }
 
   connect(): void {
+    if (this.closed) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const url = `${proto}://${location.host}/ws/match/${this.code}?token=${getToken()}`;
     this.ws = new WebSocket(url);
     this.ws.onmessage = (e) => this.onMsg(JSON.parse(e.data));
+    this.ws.onopen = () => {
+      this.attempt = 0;
+    };
     this.ws.onclose = () => {
-      if (!this.closed) setTimeout(() => this.connect(), 1500); // simple reconnect
+      if (this.closed) return;
+      const exp = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** this.attempt);
+      const jitter = Math.floor(Math.random() * 400);
+      this.attempt += 1;
+      this.reconnectTimer = setTimeout(() => this.connect(), exp + jitter);
     };
   }
 
@@ -117,6 +130,11 @@ export class MatchSocket {
 
   close(): void {
     this.closed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
+    this.ws = null;
   }
 }
