@@ -44,6 +44,9 @@ class User(Base, TimestampMixin):
 
     # cosmetics — which die face this player rolls with
     dice_skin: Mapped[str] = mapped_column(String(16), default="classic", server_default="classic")
+    unlocked_skins: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default='["classic"]'
+    )
 
     # flags / presence
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

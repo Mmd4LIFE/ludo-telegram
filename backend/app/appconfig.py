@@ -77,6 +77,43 @@ TUNABLE: dict[str, dict] = {
         "help": "Coins to re-roll the die once per turn (after reveal, before move).",
         "default": 50, "min": 0, "max": 10000,
     },
+    # --- coin sinks --------------------------------------------------------
+    "PEEK_COST": {
+        "label": "Peek cost",
+        "help": "Reveal the four face-down cards before picking.",
+        "default": 25, "min": 0, "max": 10000,
+    },
+    "INSURANCE_COST": {
+        "label": "Insurance cost",
+        "help": "Pay once per turn; if you get knocked, receive the insurance payout.",
+        "default": 40, "min": 0, "max": 10000,
+    },
+    "INSURANCE_PAYOUT": {
+        "label": "Insurance payout",
+        "help": "Coins refunded when an insured player is knocked home.",
+        "default": 30, "min": 0, "max": 10000,
+    },
+    "HINT_COST": {
+        "label": "Move hint cost",
+        "help": "Highlight the recommended legal move this turn.",
+        "default": 30, "min": 0, "max": 10000,
+    },
+    "BUY_CARD_COST": {
+        "label": "Buy bonus card",
+        "help": "Spend coins to draw a fantasy card without waiting for could've.",
+        "default": 100, "min": 0, "max": 10000,
+    },
+    "BOOST_DOUBLE_X3": {"label": "Boost Twin Dice ×3", "help": "", "default": 40, "min": 0, "max": 10000},
+    "BOOST_DOUBLE_X4": {"label": "Boost Twin Dice ×4", "help": "", "default": 80, "min": 0, "max": 10000},
+    "BOOST_STEPS_5": {"label": "Boost +5 steps", "help": "", "default": 30, "min": 0, "max": 10000},
+    "BOOST_STEPS_8": {"label": "Boost +8 steps", "help": "", "default": 60, "min": 0, "max": 10000},
+    "BOOST_RECALL_6": {"label": "Boost recall 6", "help": "", "default": 40, "min": 0, "max": 10000},
+    "BOOST_RECALL_8": {"label": "Boost recall 8", "help": "", "default": 70, "min": 0, "max": 10000},
+    "BOOST_SHIELD_EXTRA": {"label": "Boost shield rounds", "help": "", "default": 50, "min": 0, "max": 10000},
+    "BOOST_SHIELD_ALL_EXTRA": {"label": "Boost mega-shield rounds", "help": "", "default": 50, "min": 0, "max": 10000},
+    "BOOST_TELEPORT_2": {"label": "Boost teleport 2 stars", "help": "", "default": 60, "min": 0, "max": 10000},
+    "BOOST_SUMMON_2": {"label": "Boost summon 2", "help": "", "default": 80, "min": 0, "max": 10000},
+    "BOOST_JACKPOT_250": {"label": "Boost jackpot 250", "help": "", "default": 50, "min": 0, "max": 10000},
 }
 
 

@@ -170,6 +170,17 @@ function Home() {
   const [clock, setClock] = useState<Clock | null>(null);
   const [canReroll, setCanReroll] = useState(false);
   const [rerollCost, setRerollCost] = useState(50);
+  const [sinkCosts, setSinkCosts] = useState({
+    insurance: 40,
+    hint: 30,
+    buyCard: 100,
+    insurancePayout: 30,
+  });
+  const [canInsurance, setCanInsurance] = useState(false);
+  const [canHint, setCanHint] = useState(false);
+  const [canBuyCard, setCanBuyCard] = useState(false);
+  const [insured, setInsured] = useState(false);
+  const [hintToken, setHintToken] = useState<number | null>(null);
   const [rematch, setRematch] = useState<{ votes: number[]; humanIds: number[] }>({
     votes: [],
     humanIds: [],
@@ -213,6 +224,21 @@ function Home() {
         });
         setCanReroll(Boolean(p.can_reroll));
         setRerollCost(typeof p.reroll_cost === "number" ? p.reroll_cost : 50);
+        setSinkCosts({
+          insurance: p.insurance_cost ?? 40,
+          hint: p.hint_cost ?? 30,
+          buyCard: p.buy_card_cost ?? 100,
+          insurancePayout: p.insurance_payout ?? 30,
+        });
+        setCanInsurance(Boolean(p.can_insurance));
+        setCanHint(Boolean(p.can_hint));
+        setCanBuyCard(Boolean(p.can_buy_card));
+        setInsured(Boolean(p.insured?.includes(myIdRef.current ?? -1)));
+        setHintToken(typeof p.hint_token === "number" ? p.hint_token : null);
+      } else if (msg.type === "hint") {
+        if (typeof msg.token_index === "number") setHintToken(msg.token_index as number);
+      } else if (msg.type === "insured") {
+        if (msg.user_id === myIdRef.current) setInsured(true);
       } else if (msg.type === "rematch") {
         setRematch({
           votes: (msg.votes as number[]) ?? [],
@@ -349,6 +375,12 @@ function Home() {
         clock={clock}
         canReroll={canReroll}
         rerollCost={rerollCost}
+        sinkCosts={sinkCosts}
+        canInsurance={canInsurance}
+        canHint={canHint}
+        canBuyCard={canBuyCard}
+        insured={insured}
+        hintToken={hintToken}
         rematch={rematch}
         sock={sockRef.current}
         onLeave={leaveMatch}
@@ -1555,6 +1587,12 @@ function LiveMatch({
   clock,
   canReroll,
   rerollCost,
+  sinkCosts,
+  canInsurance,
+  canHint,
+  canBuyCard,
+  insured,
+  hintToken,
   rematch,
   sock,
   onLeave,
@@ -1574,6 +1612,12 @@ function LiveMatch({
   clock: Clock | null;
   canReroll: boolean;
   rerollCost: number;
+  sinkCosts: { insurance: number; hint: number; buyCard: number; insurancePayout: number };
+  canInsurance: boolean;
+  canHint: boolean;
+  canBuyCard: boolean;
+  insured: boolean;
+  hintToken: number | null;
   rematch: { votes: number[]; humanIds: number[] };
   sock: MatchSocket | null;
   onLeave: () => void;
@@ -1698,18 +1742,67 @@ function LiveMatch({
                 sock?.roll();
               }}
             />
-            {myTurn && state.phase === "move" && canReroll && (
-              <button
-                type="button"
-                disabled={profile.coins < rerollCost}
-                onClick={() => {
-                  haptic("medium");
-                  sock?.reroll();
-                }}
-                className="mt-2 h-10 w-full shrink-0 rounded-xl bg-white/5 text-sm font-semibold text-white ring-1 ring-white/10 transition active:translate-y-px disabled:opacity-40"
-              >
-                Reroll · {rerollCost} coins
-              </button>
+            {myTurn && (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {state.phase === "move" && canReroll && (
+                  <button
+                    type="button"
+                    disabled={profile.coins < rerollCost}
+                    onClick={() => {
+                      haptic("medium");
+                      sock?.reroll();
+                    }}
+                    className="h-10 rounded-xl bg-white/5 text-xs font-semibold text-white ring-1 ring-white/10 disabled:opacity-40"
+                  >
+                    Reroll · {rerollCost}
+                  </button>
+                )}
+                {canInsurance && !insured && (
+                  <button
+                    type="button"
+                    disabled={profile.coins < sinkCosts.insurance}
+                    onClick={() => {
+                      haptic("light");
+                      sock?.insurance();
+                    }}
+                    className="h-10 rounded-xl bg-white/5 text-xs font-semibold text-white ring-1 ring-white/10 disabled:opacity-40"
+                  >
+                    Insure · {sinkCosts.insurance}
+                  </button>
+                )}
+                {insured && (
+                  <div className="grid h-10 place-items-center rounded-xl bg-emerald-500/15 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/30">
+                    Insured (+{sinkCosts.insurancePayout})
+                  </div>
+                )}
+                {state.phase === "move" && canHint && (
+                  <button
+                    type="button"
+                    disabled={profile.coins < sinkCosts.hint}
+                    onClick={() => {
+                      haptic("light");
+                      sock?.hint();
+                    }}
+                    className="h-10 rounded-xl bg-white/5 text-xs font-semibold text-white ring-1 ring-white/10 disabled:opacity-40"
+                  >
+                    Hint · {sinkCosts.hint}
+                    {hintToken != null ? ` → #${hintToken + 1}` : ""}
+                  </button>
+                )}
+                {canBuyCard && (
+                  <button
+                    type="button"
+                    disabled={profile.coins < sinkCosts.buyCard}
+                    onClick={() => {
+                      haptic("medium");
+                      sock?.buyCard();
+                    }}
+                    className="h-10 rounded-xl bg-primary/20 text-xs font-semibold text-white ring-1 ring-primary/40 disabled:opacity-40"
+                  >
+                    Buy card · {sinkCosts.buyCard}
+                  </button>
+                )}
+              </div>
             )}
             <p className="mt-1 text-center text-[11px] text-muted-foreground">
               {noMoves
@@ -1717,7 +1810,9 @@ function LiveMatch({
                 : myTurn
                   ? state.phase === "roll"
                     ? "Your turn"
-                    : "Tap a glowing token"
+                    : hintToken != null
+                      ? `Hint: token #${hintToken + 1} — or tap any glowing piece`
+                      : "Tap a glowing token"
                   : `${currentColor}'s turn…`}
             </p>
           </div>
@@ -1746,6 +1841,7 @@ function LiveMatch({
           seatColor={Object.fromEntries(
             state.players.map((p, s) => [String(s), COLOR_HEX[p.color] ?? "#8892a6"])
           )}
+          coins={profile.coins}
           onPick={(i) => {
             haptic("medium");
             sock?.pickCard(i);
@@ -1754,6 +1850,9 @@ function LiveMatch({
             haptic("medium");
             sock?.pickTarget(s);
           }}
+          onPeek={() => sock?.peek()}
+          onBoost={(id) => sock?.boostCard(id)}
+          onSkipBoost={() => sock?.skipBoost()}
         />
       )}
       {profileId != null && (
@@ -1830,16 +1929,24 @@ function ChanceBox({
   drawerName,
   seatNames,
   seatColor,
+  coins,
   onPick,
   onTarget,
+  onPeek,
+  onBoost,
+  onSkipBoost,
 }: {
   card: CardDraw;
   mine: boolean;
   drawerName: string;
   seatNames: Record<string, string>;
   seatColor: Record<string, string>;
+  coins: number;
   onPick: (index: number) => void;
   onTarget: (seat: number) => void;
+  onPeek: () => void;
+  onBoost: (boostId: string) => void;
+  onSkipBoost: () => void;
 }) {
   const [catalog, setCatalog] = useState<Record<string, CardDef>>({});
   const [tapped, setTapped] = useState<number | null>(null);
@@ -1869,18 +1976,24 @@ function ChanceBox({
   };
 
   const couldve = card.reason === "couldve";
-  const reasonText = couldve
+  const bought = card.reason === "bought";
+  const reasonText = bought
     ? mine
-      ? "3 missed knocks — bonus card!"
-      : `${drawerName} passed up 3 knocks`
-    : mine
-      ? "You brought a piece home"
-      : `${drawerName} brought a piece home`;
+      ? "Bought with coins"
+      : `${drawerName} bought a card`
+    : couldve
+      ? mine
+        ? "3 missed knocks — bonus card!"
+        : `${drawerName} passed up 3 knocks`
+      : mine
+        ? "You brought a piece home"
+        : `${drawerName} brought a piece home`;
 
   let title = "";
   if (stage === "pick") title = mine ? "Your prize" : `${drawerName} is drawing`;
   else if (stage === "reveal") title = mine ? "You drew" : `${drawerName} drew`;
   else if (stage === "target") title = mine ? "Choose a target" : `${drawerName} is aiming`;
+  else if (stage === "boost") title = mine ? "Boost with coins?" : `${drawerName} may boost`;
   else title = mine ? "You played" : `${drawerName} played`;
 
   const reasonChip = (
@@ -1935,50 +2048,100 @@ function ChanceBox({
           : pickedCard?.name ?? "…"}
       </div>
 
-      {/* pick / reveal: the four-card fan (flips on reveal) */}
+      {/* pick / reveal: the four-card fan (flips on reveal or peek) */}
       {(stage === "pick" || stage === "reveal") && (
-        <div className="grid w-full max-w-xs grid-cols-2 gap-3">
-          {[0, 1, 2, 3].map((i) => {
-            const c = stage === "reveal" ? catalog[options[i]] : undefined;
-            const isPicked = stage === "reveal" && i === pickedIdx;
-            const flipped = stage === "reveal";
-            return (
-              <button
-                key={i}
-                onClick={() => tapCard(i)}
-                disabled={!mine || stage !== "pick"}
-                className={cn(
-                  "transition-transform",
-                  stage === "pick" && mine && tapped === null && "active:scale-95",
-                  flipped && !isPicked && "opacity-40",
-                  tapped === i && stage === "pick" && "scale-105"
-                )}
-                style={{ perspective: 800 }}
-              >
-                <div
-                  style={{
-                    position: "relative",
-                    aspectRatio: "3 / 4",
-                    transformStyle: "preserve-3d",
-                    transition: "transform 0.5s",
-                    transform: flipped ? "rotateY(180deg)" : "none",
-                  }}
+        <>
+          <div className="grid w-full max-w-xs grid-cols-2 gap-3">
+            {[0, 1, 2, 3].map((i) => {
+              const showFace = stage === "reveal" || Boolean(card.peeked);
+              const c = showFace ? catalog[options[i]] : undefined;
+              const isPicked = stage === "reveal" && i === pickedIdx;
+              const flipped = showFace;
+              return (
+                <button
+                  key={i}
+                  onClick={() => tapCard(i)}
+                  disabled={!mine || stage !== "pick"}
+                  className={cn(
+                    "transition-transform",
+                    stage === "pick" && mine && tapped === null && "active:scale-95",
+                    flipped && stage === "reveal" && !isPicked && "opacity-40",
+                    tapped === i && stage === "pick" && "scale-105"
+                  )}
+                  style={{ perspective: 800 }}
                 >
                   <div
-                    style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}
-                    className="grid place-items-center rounded-2xl border-2 border-white/15 bg-gradient-to-br from-primary/40 to-secondary shadow-lg"
+                    style={{
+                      position: "relative",
+                      aspectRatio: "3 / 4",
+                      transformStyle: "preserve-3d",
+                      transition: "transform 0.5s",
+                      transform: flipped ? "rotateY(180deg)" : "none",
+                    }}
                   >
-                    <Sparkles className="size-8 text-white/70" />
+                    <div
+                      style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}
+                      className="grid place-items-center rounded-2xl border-2 border-white/15 bg-gradient-to-br from-primary/40 to-secondary shadow-lg"
+                    >
+                      <Sparkles className="size-8 text-white/70" />
+                    </div>
+                    <div
+                      style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
+                    >
+                      <CardFace c={c} highlight={isPicked} />
+                    </div>
                   </div>
-                  <div
-                    style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
-                  >
-                    <CardFace c={c} highlight={isPicked} />
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+                </button>
+              );
+            })}
+          </div>
+          {stage === "pick" && mine && !card.peeked && (
+            <button
+              type="button"
+              disabled={coins < (card.peek_cost ?? 25)}
+              onClick={() => {
+                haptic("light");
+                onPeek();
+              }}
+              className="mt-4 h-10 rounded-xl bg-white/10 px-4 text-sm font-semibold text-white ring-1 ring-white/15 disabled:opacity-40"
+            >
+              Peek · {card.peek_cost ?? 25} coins
+            </button>
+          )}
+        </>
+      )}
+
+      {stage === "boost" && (
+        <div className="flex w-full max-w-xs flex-col gap-2">
+          <div className="mx-auto mb-2 w-28" style={{ aspectRatio: "3 / 4" }}>
+            <CardFace c={pickedCard} big highlight />
+          </div>
+          {(card.boosts ?? []).map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              disabled={!mine || coins < b.cost}
+              onClick={() => {
+                haptic("medium");
+                onBoost(b.id);
+              }}
+              className="rounded-2xl bg-primary/20 px-4 py-3 text-left text-sm font-bold text-white ring-1 ring-primary/40 disabled:opacity-40"
+            >
+              {b.label}
+              <span className="mt-0.5 block text-[11px] font-semibold text-primary">{b.cost} coins</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={!mine}
+            onClick={() => {
+              haptic("light");
+              onSkipBoost();
+            }}
+            className="mt-1 rounded-2xl bg-white/5 px-4 py-3 text-sm font-semibold text-muted-foreground ring-1 ring-white/10"
+          >
+            Skip boost
+          </button>
         </div>
       )}
 
@@ -3774,24 +3937,37 @@ function MeScreen({
         <div className="mt-3 grid grid-cols-3 gap-2">
           {Object.values(DICE_SKINS).map((sk) => {
             const active = profile.dice_skin === sk.id;
+            const unlocked = (profile.unlocked_skins ?? ["classic"]).includes(sk.id);
+            const prices: Record<string, number> = {
+              classic: 0, mint: 150, ocean: 200, night: 200, gold: 250, ruby: 300,
+            };
+            const price = prices[sk.id] ?? 0;
             return (
               <button
                 key={sk.id}
                 onClick={async () => {
                   haptic("light");
                   try {
-                    onProfile(await api.setDiceSkin(sk.id));
+                    onProfile(
+                      unlocked
+                        ? await api.setDiceSkin(sk.id)
+                        : await api.buyDiceSkin(sk.id)
+                    );
                   } catch {
                     /* ignore */
                   }
                 }}
                 className={cn(
                   "flex flex-col items-center gap-1.5 rounded-2xl bg-secondary/60 p-3 transition active:scale-[0.97]",
-                  active ? "ring-2 ring-primary" : "ring-1 ring-white/10"
+                  active ? "ring-2 ring-primary" : "ring-1 ring-white/10",
+                  !unlocked && "opacity-80"
                 )}
               >
                 <DieFace value={5} skin={sk.id} size={38} />
                 <span className="text-[10px] font-bold text-muted-foreground">{sk.name}</span>
+                <span className="text-[9px] font-semibold text-primary">
+                  {unlocked ? (active ? "Equipped" : "Owned") : `${price} coins`}
+                </span>
               </button>
             );
           })}

@@ -49,6 +49,11 @@ from app.game import card_catalog
 from app.game.connection import hub
 from app.models import Match, MatchStatus, DiceRoll, Knockout, CardDraw
 from app.services import ledger
+from app.services.coin_features import (
+    boost_cost,
+    boost_options_for,
+    boost_params,
+)
 from app.services.ledger import InsufficientFunds, placement_payout
 from sqlalchemy import insert
 
@@ -127,7 +132,10 @@ class MatchRuntime:
         self._recent_cards: list[tuple[int, str]] = []
         self.stat_coins: dict[int, int] = {}   # uid -> bonus coins to grant (Jackpot)
         self.stat_couldve_coins: dict[int, int] = {}  # uid -> PAY_COULDVE accruals
+        self.stat_insurance: dict[int, int] = {}  # uid -> insurance payouts pending
         self._rerolled_this_turn = False
+        self._insured: set[int] = set()  # user_ids with active knock insurance
+        self._hint_token: int | None = None  # recommended token_index this move
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -247,28 +255,80 @@ class MatchRuntime:
         return bool(self.buf_rolls or self.buf_knocks or self.buf_cards)
 
     async def _wait_move_or_reroll(self, seat: int):
-        """Accept ``move`` or one paid ``reroll`` during the move window. Returns move or None."""
+        """Accept move / reroll / insurance / hint during the move window."""
         remaining = float(self.cfg["TURN_TIMEOUT_SECONDS"])
         loop = asyncio.get_event_loop()
         end = loop.time() + remaining
+        uid = self._human_uid(seat)
         while True:
             left = end - loop.time()
             if left <= 0:
                 return None
-            got = await self._drain_for(seat, {"move", "reroll"}, left)
+            got = await self._drain_for(
+                seat, {"move", "reroll", "insurance", "hint"}, left
+            )
             if got is None:
                 return None
-            if got.get("type") == "reroll":
-                ok = await self._try_reroll(seat)
-                if not ok:
-                    continue
-                # refresh deadline display after new die
-                self._deadline = end
+            mtype = got.get("type")
+            if mtype == "reroll":
+                if await self._try_reroll(seat):
+                    self._deadline = end
+                    await self._broadcast()
+                continue
+            if mtype == "insurance" and uid is not None:
+                await self._try_insurance(uid)
+                await self._broadcast()
+                continue
+            if mtype == "hint" and uid is not None:
+                await self._try_hint(seat, uid)
                 await self._broadcast()
                 continue
             moves = legal_moves(self.state)
             idx = got.get("token_index")
             return next((m for m in moves if m.token_index == idx), None)
+
+    async def _try_insurance(self, uid: int) -> bool:
+        if uid in self._insured:
+            return False
+        cost = max(0, int(self.cfg.get("INSURANCE_COST", 40)))
+        if not await self._coin_debit(uid, cost, "insurance"):
+            return False
+        self._insured.add(uid)
+        await hub.broadcast(
+            self.code, {"type": "insured", "user_id": uid, "payout": int(self.cfg.get("INSURANCE_PAYOUT", 30))}
+        )
+        return True
+
+    async def _try_hint(self, seat: int, uid: int) -> bool:
+        if self._hint_token is not None:
+            return False
+        cost = max(0, int(self.cfg.get("HINT_COST", 30)))
+        if not await self._coin_debit(uid, cost, "hint", {"seat": seat}):
+            return False
+        moves = legal_moves(self.state)
+        if not moves:
+            return False
+        chosen = choose_move(self.state, moves, self._rng)
+        self._hint_token = chosen.token_index if chosen else moves[0].token_index
+        await hub.broadcast(
+            self.code,
+            {"type": "hint", "user_id": uid, "token_index": self._hint_token},
+        )
+        return True
+
+    async def buy_bonus_card(self, user_id: int) -> bool:
+        """Spend coins to draw a fantasy card (could've shortcut)."""
+        if self._card is not None or self.state.phase is Phase.FINISHED:
+            return False
+        seat = next((s for s, u in self.seat_user.items() if u == user_id), None)
+        if seat is None or seat in self.removed_seats:
+            return False
+        cost = max(0, int(self.cfg.get("BUY_CARD_COST", 100)))
+        if not await self._coin_debit(user_id, cost, "buy_card"):
+            return False
+        # Run the draw as a nested sequence (safe when called from the driver loop).
+        await self._draw_card(seat, self.state.turn, reason="bought")
+        return True
 
     async def _try_reroll(self, seat: int) -> bool:
         """Debit REROLL_COST and replace the current die. At most once per turn."""
@@ -278,28 +338,10 @@ class MatchRuntime:
         if uid is None:
             return False
         cost = max(0, int(self.cfg.get("REROLL_COST", 50)))
-        if cost > 0:
-            try:
-                async with SessionLocal() as session:
-                    await ledger.debit(
-                        session,
-                        uid,
-                        cost,
-                        reason="reroll",
-                        ref_type="match",
-                        ref_id=self.match_id,
-                        meta={"seat": seat, "turn": self.state.turn},
-                    )
-                    await session.commit()
-            except InsufficientFunds:
-                await hub.broadcast(
-                    self.code,
-                    {"type": "error", "code": "insufficient_coins", "user_id": uid},
-                )
-                return False
-            except Exception:  # noqa: BLE001
-                logger.exception("reroll debit failed match=%s user=%s", self.code, uid)
-                return False
+        if cost > 0 and not await self._coin_debit(
+            uid, cost, "reroll", {"seat": seat, "turn": self.state.turn}
+        ):
+            return False
 
         # Undo last face from histograms if we recorded it, then apply a fresh roll.
         old_face = self.state.roll_face
@@ -332,8 +374,42 @@ class MatchRuntime:
                 "value": face, "turn": self.state.turn,
             })
         self._rerolled_this_turn = True
+        self._hint_token = None
         await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)
         return True
+
+    async def _coin_debit(self, uid: int, amount: int, reason: str, meta: dict | None = None) -> bool:
+        if amount <= 0:
+            return True
+        try:
+            async with SessionLocal() as session:
+                await ledger.debit(
+                    session, uid, amount, reason=reason,
+                    ref_type="match", ref_id=self.match_id, meta=meta,
+                )
+                await session.commit()
+            return True
+        except InsufficientFunds:
+            await hub.broadcast(
+                self.code, {"type": "error", "code": "insufficient_coins", "user_id": uid}
+            )
+            return False
+        except Exception:  # noqa: BLE001
+            logger.exception("coin debit failed match=%s user=%s reason=%s", self.code, uid, reason)
+            return False
+
+    async def _coin_credit(self, uid: int, amount: int, reason: str, meta: dict | None = None) -> None:
+        if amount <= 0:
+            return
+        try:
+            async with SessionLocal() as session:
+                await ledger.credit(
+                    session, uid, amount, reason=reason,
+                    ref_type="match", ref_id=self.match_id, meta=meta,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("coin credit failed match=%s user=%s", self.code, uid)
 
     def _should_persist(self) -> bool:
         """Persist on a cadence, when event buffers grow, or when the game ends."""
@@ -356,12 +432,36 @@ class MatchRuntime:
             await asyncio.sleep(settings.BOT_TABLE_IDLE_SECONDS)
 
         if self.state.phase is Phase.ROLL:
+            self._hint_token = None
             if not bot_seat:
                 self._deadline = time.time() + self.cfg["TURN_TIMEOUT_SECONDS"]
                 await self._broadcast()  # push the countdown to the client
-                got = await self._drain_for(seat, "roll", self.cfg["TURN_TIMEOUT_SECONDS"])
+                uid = self._human_uid(seat)
+                remaining = float(self.cfg["TURN_TIMEOUT_SECONDS"])
+                loop = asyncio.get_event_loop()
+                end = loop.time() + remaining
+                got = None
+                while True:
+                    left = end - loop.time()
+                    if left <= 0:
+                        break
+                    got = await self._drain_for(
+                        seat, {"roll", "buy_card", "insurance"}, left
+                    )
+                    if got is None:
+                        break
+                    if got.get("type") == "buy_card" and uid is not None:
+                        await self.buy_bonus_card(uid)
+                        self._deadline = end
+                        await self._broadcast()
+                        continue
+                    if got.get("type") == "insurance" and uid is not None:
+                        await self._try_insurance(uid)
+                        await self._broadcast()
+                        continue
+                    break
                 self._deadline = None
-                if got is None:
+                if got is None or got.get("type") != "roll":
                     self.seat_missed[seat] = self.seat_missed.get(seat, 0) + 1
                     logger.info(
                         "seat %s timed out on roll (%s), missed=%d",
@@ -374,10 +474,13 @@ class MatchRuntime:
             else:
                 await self._think()
             register_roll(self.state, roll_die(self._rng))
-            # Twin Dice: double the MOVEMENT of this roll (face/six logic keep the real face)
+            # Twin Dice: multiply MOVEMENT (face/six logic keep the real face)
             if self.state.eff("double", seat) > 0 and self.state.roll_face is not None:
-                self.state.die = self.state.roll_face * 2
+                mult = self.state.eff("double_mult", seat) or 2
+                self.state.die = self.state.roll_face * max(2, mult)
                 self.state.add_eff("double", seat, -1)
+                if self.state.eff("double", seat) <= 0:
+                    self.state.set_eff("double_mult", seat, 0)
             if self.state.roll_face is not None:
                 face = self.state.roll_face
                 self.seat_last_die[seat] = face          # show the true face, not the doubled value
@@ -432,6 +535,13 @@ class MatchRuntime:
                     victim = self._human_uid(cseat)
                     if victim is not None:
                         self.stat_taken[victim] = self.stat_taken.get(victim, 0) + 1
+                        if victim in self._insured:
+                            self._insured.discard(victim)
+                            pay = max(0, int(self.cfg.get("INSURANCE_PAYOUT", 30)))
+                            if pay:
+                                self.stat_insurance[victim] = (
+                                    self.stat_insurance.get(victim, 0) + pay
+                                )
                     if mover is not None:
                         self.buf_knocks.append({
                             "match_id": self.match_id, "turn": turn_no,
@@ -479,26 +589,52 @@ class MatchRuntime:
     async def _draw_card(
         self, seat: int, turn_no: int, pool: frozenset[str] | None = None, reason: str = "home"
     ) -> None:
-        """Offer four random cards face-down, wait for the player's pick (auto-pick on
-        timeout), reveal them, let them choose a target if needed, then apply + log. When
-        ``pool`` is given, only cards whose effect is in it are offered (finishers).
-        ``reason`` ("home" | "couldve") is surfaced so everyone sees why the card was drawn."""
+        """Offer four cards; optional peek/boost spend; then target + apply."""
         uid = self._human_uid(seat)
         if uid is None:
             return
         effects = await card_catalog.enabled_effects()
         ids = [cid for cid in effects if pool is None or effects[cid] in pool]
         if len(ids) < 4:
-            return   # not enough eligible cards to offer a proper draw
+            return
         options = self._rng.sample(ids, 4)
+        peeked = False
 
-        self._card = {"seat": seat, "stage": "pick", "reason": reason}   # ids withheld until reveal
+        self._card = {
+            "seat": seat, "stage": "pick", "reason": reason,
+            "peek_cost": int(self.cfg.get("PEEK_COST", 25)),
+        }
         self._deadline = time.time() + self.cfg["CARD_PICK_SECONDS"]
         await self._broadcast()
-        got = await self._drain_for(seat, "pick_card", self.cfg["CARD_PICK_SECONDS"])
+
+        # pick or peek
+        remaining = float(self.cfg["CARD_PICK_SECONDS"])
+        loop = asyncio.get_event_loop()
+        end = loop.time() + remaining
+        got = None
+        while True:
+            left = end - loop.time()
+            if left <= 0:
+                break
+            got = await self._drain_for(seat, {"pick_card", "peek"}, left)
+            if got is None:
+                break
+            if got.get("type") == "peek" and not peeked:
+                cost = max(0, int(self.cfg.get("PEEK_COST", 25)))
+                if await self._coin_debit(uid, cost, "peek"):
+                    peeked = True
+                    self._card = {
+                        **self._card,
+                        "peeked": True,
+                        "options": options,
+                    }
+                    self._deadline = end
+                    await self._broadcast()
+                continue
+            break
         self._deadline = None
 
-        if got is not None:
+        if got is not None and got.get("type") == "pick_card":
             try:
                 idx = int(got.get("index", 0))
             except (TypeError, ValueError):
@@ -509,12 +645,13 @@ class MatchRuntime:
         picked = options[idx]
         effect = effects[picked]
 
-        # 1) reveal the drawn card to everyone
-        self._card = {"seat": seat, "stage": "reveal", "options": options, "picked": idx, "reason": reason}
+        self._card = {
+            "seat": seat, "stage": "reveal", "options": options,
+            "picked": idx, "reason": reason,
+        }
         await self._broadcast()
         await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
 
-        # 2) if the card hits an opponent and there's a choice, let the drawer pick one
         target: int | None = None
         targets = self._valid_targets(seat, effect)
         if targets:
@@ -537,19 +674,40 @@ class MatchRuntime:
                         chosen = None
                 target = chosen if chosen in targets else self._leading_among(seat, targets)
 
-        # 3) drop to a non-blocking result banner FIRST (board becomes visible) so that,
-        #    when the effect lands, everyone watches the board play it out (a Recall token
-        #    gliding back, a Swap, a shield ring appearing) instead of it happening hidden
-        #    behind the card overlay.
+        # optional coin boost
+        boost_id: str | None = None
+        boosts = boost_options_for(effect, self.cfg)
+        if boosts:
+            self._card = {
+                "seat": seat, "stage": "boost", "options": options,
+                "picked": idx, "target": target, "reason": reason,
+                "boosts": boosts,
+            }
+            self._deadline = time.time() + self.cfg["CARD_PICK_SECONDS"]
+            await self._broadcast()
+            got = await self._drain_for(
+                seat, {"boost_card", "skip_boost"}, self.cfg["CARD_PICK_SECONDS"]
+            )
+            self._deadline = None
+            if got and got.get("type") == "boost_card":
+                bid = str(got.get("boost_id") or "")
+                cost = boost_cost(effect, bid, self.cfg)
+                if bid and cost >= 0 and await self._coin_debit(
+                    uid, cost, "card_boost", {"card": picked, "boost_id": bid}
+                ):
+                    boost_id = bid
+
+        params = boost_params(effect, boost_id)
+
         self._card = {
             "seat": seat, "stage": "result", "options": options,
             "picked": idx, "target": target, "reason": reason,
+            "boost_id": boost_id,
         }
         await self._broadcast()
         await asyncio.sleep(settings.CARD_RESULT_DELAY)
 
-        # 4) now apply the effect + log — the state change animates on the visible board
-        affected = self._apply_card(seat, effect, target)
+        affected = self._apply_card(seat, effect, target, params)
         self.buf_cards.append({
             "match_id": self.match_id, "user_id": uid, "seat": seat,
             "options": options, "picked": picked, "turn": turn_no,
@@ -590,10 +748,15 @@ class MatchRuntime:
         return best
 
     # ---- fantasy-card effects --------------------------------------------
-    def _apply_card(self, seat: int, effect: str, target: int | None = None) -> int | None:
-        """Apply a drawn card's effect. ``target`` is the opponent seat the drawer chose
-        (or None → auto). Returns the seat actually affected (for the result banner), or
-        None for a self-only card. Every effect is wired; Mirror replays an opponent's."""
+    def _apply_card(
+        self,
+        seat: int,
+        effect: str,
+        target: int | None = None,
+        boost: dict | None = None,
+    ) -> int | None:
+        """Apply a drawn card's effect. ``boost`` holds paid upgrade params."""
+        boost = boost or {}
         if effect != "mirror":
             self._recent_cards.append((seat, effect))
         st = self.state
@@ -605,27 +768,32 @@ class MatchRuntime:
             if c not in st.active_stars:
                 st.active_stars.append(c)
         elif effect == "shield":
-            st.set_eff("shield", seat, 3)                 # your tokens uncapturable, 3 rounds
+            st.set_eff("shield", seat, int(boost.get("rounds", 3)))
         elif effect == "shield_all":
-            st.set_eff("shield", seat, 5)                 # a longer sanctuary
+            st.set_eff("shield", seat, int(boost.get("rounds", 5)))
         elif effect == "double_dice":
-            st.set_eff("double", seat, 2)                 # next 2 rolls doubled
+            charges = int(boost.get("charges", 2))
+            mult = int(boost.get("mult", 2))
+            st.set_eff("double", seat, charges)
+            st.set_eff("double_mult", seat, max(2, mult))
         elif effect == "second_chance":
             st.set_eff("second_chance", seat, 1)
         elif effect == "toll":
-            st.set_eff("toll", seat, 2)                   # your star blocks rivals ~1 round
+            st.set_eff("toll", seat, 2)
         elif effect == "steal_turn":
-            self._grant_turn(seat)                        # jump the queue: take a turn now
+            self._grant_turn(seat)
         elif effect == "boost":
-            self._advance_own_token(seat, 3)
+            self._advance_own_token(seat, int(boost.get("steps", 3)))
         elif effect == "summon":
-            self._release_from_base(seat)
+            for _ in range(max(1, int(boost.get("count", 1)))):
+                self._release_from_base(seat)
         elif effect == "teleport":
-            self._warp_to_next_star(seat)
+            for _ in range(max(1, int(boost.get("warps", 1)))):
+                self._warp_to_next_star(seat)
         elif effect == "coins":
             uid = self._human_uid(seat)
             if uid is not None:
-                self.stat_coins[uid] = self.stat_coins.get(uid, 0) + 150
+                self.stat_coins[uid] = self.stat_coins.get(uid, 0) + int(boost.get("coins", 150))
         elif effect in ("lock", "lock2"):
             tgt = target if target is not None else self._leading_rival(seat)
             if tgt is not None:
@@ -634,7 +802,7 @@ class MatchRuntime:
         elif effect == "recall":
             tgt = target if target is not None else self._leading_rival(seat)
             if tgt is not None:
-                self._recall_seat(tgt, 4)
+                self._recall_seat(tgt, int(boost.get("steps", 4)))
             return tgt
         elif effect == "swap":
             tgt = target if target is not None else self._leading_rival(seat)
@@ -646,7 +814,7 @@ class MatchRuntime:
                 (eff for s, eff in reversed(self._recent_cards) if s != seat), None
             )
             if mirrored:
-                return self._apply_card(seat, mirrored, target)
+                return self._apply_card(seat, mirrored, target, boost)
         return None
 
     def _grant_turn(self, seat: int) -> None:
@@ -692,6 +860,11 @@ class MatchRuntime:
             vuid = self._human_uid(vseat)
             if vuid is not None:
                 self.stat_taken[vuid] = self.stat_taken.get(vuid, 0) + 1
+                if vuid in self._insured:
+                    self._insured.discard(vuid)
+                    pay = max(0, int(self.cfg.get("INSURANCE_PAYOUT", 30)))
+                    if pay:
+                        self.stat_insurance[vuid] = self.stat_insurance.get(vuid, 0) + pay
 
     def _advance_own_token(self, seat: int, steps: int) -> None:
         for i in self._ring_tokens(seat):
@@ -779,8 +952,17 @@ class MatchRuntime:
             "can_reroll": (
                 self.state.phase is Phase.MOVE
                 and not self._rerolled_this_turn
-                and int(self.cfg.get("REROLL_COST", 50)) >= 0
             ),
+            "peek_cost": int(self.cfg.get("PEEK_COST", 25)),
+            "insurance_cost": int(self.cfg.get("INSURANCE_COST", 40)),
+            "insurance_payout": int(self.cfg.get("INSURANCE_PAYOUT", 30)),
+            "hint_cost": int(self.cfg.get("HINT_COST", 30)),
+            "buy_card_cost": int(self.cfg.get("BUY_CARD_COST", 100)),
+            "insured": sorted(self._insured),
+            "hint_token": self._hint_token,
+            "can_insurance": self.state.phase in (Phase.ROLL, Phase.MOVE),
+            "can_hint": self.state.phase is Phase.MOVE and self._hint_token is None,
+            "can_buy_card": self._card is None and self.state.phase is not Phase.FINISHED,
         }
 
     async def _broadcast(self) -> None:
@@ -871,7 +1053,8 @@ class MatchRuntime:
         """
         uids = (
             set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
-            | set(self.stat_potential) | set(self.stat_coins) | set(self.stat_couldve_coins)
+            | set(self.stat_potential) | set(self.stat_coins)
+            | set(self.stat_couldve_coins) | set(self.stat_insurance)
         )
         if not uids:
             return
@@ -907,6 +1090,15 @@ class MatchRuntime:
                     ref_type="match",
                     ref_id=self.match_id,
                 )
+            if self.stat_insurance.get(uid):
+                await ledger.credit(
+                    session,
+                    uid,
+                    int(self.stat_insurance[uid]),
+                    reason="insurance_payout",
+                    ref_type="match",
+                    ref_id=self.match_id,
+                )
 
         # deltas are now persisted (within this session's pending commit) — reset them so
         # the next flush only applies what's new.
@@ -916,6 +1108,7 @@ class MatchRuntime:
         self.stat_potential = {}
         self.stat_coins = {}
         self.stat_couldve_coins = {}
+        self.stat_insurance = {}
 
     async def _settle(self) -> None:
         """Write final placements, pay placement rewards via ledger, bump stats."""

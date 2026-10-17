@@ -32,12 +32,16 @@ class UserProfile(BaseModel):
     bot_username: str = ""
     is_admin: bool = False
     dice_skin: str = "classic"
+    unlocked_skins: list[str] = ["classic"]
 
     @classmethod
     def from_user(cls, u) -> "UserProfile":
         from app.bot.instance import get_bot_username
         from app.config import settings
 
+        skins = list(getattr(u, "unlocked_skins", None) or ["classic"])
+        if "classic" not in skins:
+            skins = ["classic", *skins]
         return cls(
             id=u.id,
             first_name=u.first_name,
@@ -50,10 +54,15 @@ class UserProfile(BaseModel):
             bot_username=get_bot_username(),
             is_admin=u.telegram_id in settings.admin_ids,
             dice_skin=getattr(u, "dice_skin", "classic") or "classic",
+            unlocked_skins=skins,
         )
 
 
 class SetDiceSkinRequest(BaseModel):
+    skin: str
+
+
+class BuyDiceSkinRequest(BaseModel):
     skin: str
 
 

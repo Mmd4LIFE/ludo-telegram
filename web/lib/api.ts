@@ -55,6 +55,7 @@ export interface Profile {
   bot_username: string;
   is_admin: boolean;
   dice_skin: string;
+  unlocked_skins?: string[];
 }
 
 export interface AdminUser {
@@ -333,6 +334,10 @@ export async function authenticate(): Promise<Profile> {
 export const api = {
   me: () => req<Profile>("GET", "/api/profile/me"),
   setDiceSkin: (skin: string) => req<Profile>("POST", "/api/profile/dice-skin", { skin }),
+  buyDiceSkin: (skin: string) =>
+    req<Profile>("POST", "/api/profile/dice-skin/buy", { skin }),
+  diceSkinCatalog: () =>
+    req<{ id: string; price: number }[]>("GET", "/api/profile/dice-skins"),
   listMatches: () => req<MatchSummary[]>("GET", "/api/matches"),
   getMatch: (code: string) => req<MatchSummary>("GET", `/api/matches/${code}`),
   createMatch: (opts: {

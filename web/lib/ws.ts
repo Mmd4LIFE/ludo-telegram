@@ -28,15 +28,25 @@ export interface GameState {
   };
 }
 
+export interface CardBoostOption {
+  id: string;
+  label: string;
+  cost: number;
+}
+
 // an in-progress fantasy-card draw (reach-home reward)
 export interface CardDraw {
   seat: number;
-  stage: "pick" | "reveal" | "target" | "result";
-  options?: string[]; // card ids — present from the reveal stage on
+  stage: "pick" | "reveal" | "target" | "boost" | "result";
+  options?: string[]; // card ids — present from the reveal stage on (or after peek)
   picked?: number; // chosen index — present from the reveal stage on
   targets?: number[]; // seats the drawer may target (stage "target")
   target?: number | null; // the seat actually hit (stage "result")
-  reason?: string; // why the card was drawn: "home" | "couldve"
+  reason?: string; // why the card was drawn: "home" | "couldve" | "bought"
+  peeked?: boolean;
+  peek_cost?: number;
+  boosts?: CardBoostOption[];
+  boost_id?: string | null;
 }
 
 export interface LegalMove {
@@ -69,6 +79,16 @@ export interface StatePayload {
   turn_seconds: number; // full turn length, for the countdown bar
   reroll_cost?: number;
   can_reroll?: boolean;
+  peek_cost?: number;
+  insurance_cost?: number;
+  insurance_payout?: number;
+  hint_cost?: number;
+  buy_card_cost?: number;
+  insured?: number[];
+  hint_token?: number | null;
+  can_insurance?: boolean;
+  can_hint?: boolean;
+  can_buy_card?: boolean;
 }
 
 type Handler = (msg: StatePayload | { type: string; [k: string]: unknown }) => void;
@@ -141,6 +161,24 @@ export class MatchSocket {
   }
   reroll(): void {
     this.send({ type: "reroll" });
+  }
+  peek(): void {
+    this.send({ type: "peek" });
+  }
+  boostCard(boostId: string): void {
+    this.send({ type: "boost_card", boost_id: boostId });
+  }
+  skipBoost(): void {
+    this.send({ type: "skip_boost" });
+  }
+  insurance(): void {
+    this.send({ type: "insurance" });
+  }
+  hint(): void {
+    this.send({ type: "hint" });
+  }
+  buyCard(): void {
+    this.send({ type: "buy_card" });
   }
   pickCard(index: number): void {
     this.send({ type: "pick_card", index });

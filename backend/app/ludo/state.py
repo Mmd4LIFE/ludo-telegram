@@ -25,7 +25,8 @@ class Phase(str, Enum):
 #   skip          seat -> upcoming turns to skip (frozen)
 #   second_chance seat -> 1 while a one-shot "don't get knocked home" is armed
 #   toll          seat -> rounds its neutral star blocks rivals from landing on it
-_EFFECT_KEYS = ("shield", "double", "skip", "second_chance", "toll")
+# double_mult: Twin Dice movement multiplier (2/3/4) while ``double`` charges remain
+_EFFECT_KEYS = ("shield", "double", "double_mult", "skip", "second_chance", "toll")
 
 
 def _default_effects() -> dict[str, dict[int, int]]:
@@ -162,6 +163,8 @@ class GameState:
             roll_face=d.get("roll_face"),
             effects={
                 key: {int(s): int(v) for s, v in (d.get("effects", {}).get(key) or {}).items()}
-                for key in _EFFECT_KEYS
+                for key in (
+                    set(_EFFECT_KEYS) | set((d.get("effects") or {}).keys())
+                )
             },
         )
