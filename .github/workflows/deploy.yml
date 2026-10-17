@@ -18,6 +18,11 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push'
     steps:
+      - name: Checkout deploy SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
       - name: Download webout artifact
         uses: actions/download-artifact@v4
         with:
@@ -26,8 +31,21 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           path: webout
 
-      - name: Pack webout tarball
-        run: tar czf ludo-webout.tgz -C webout .
+      - name: Pack webout + source tarballs
+        run: |
+          set -euo pipefail
+          tar czf ludo-webout.tgz -C webout .
+          # Sync app code without wiping server secrets / local web build junk
+          tar czf ludo-src.tgz \
+            --exclude='.git' \
+            --exclude='web/node_modules' \
+            --exclude='web/out' \
+            --exclude='webout' \
+            --exclude='.env' \
+            --exclude='*.pyc' \
+            --exclude='__pycache__' \
+            backend deploy nginx docker-compose.yml .env.example README.md docs
+          ls -lh ludo-webout.tgz ludo-src.tgz
 
       - name: Prepare remote drop dir
         uses: appleboy/ssh-action@v1.2.0
@@ -38,21 +56,19 @@ jobs:
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           script: |
             set -euo pipefail
-            mkdir -p "$HOME/.ludo-ci"
-            rm -f "$HOME/.ludo-ci/ludo-webout.tgz" /tmp/ludo-webout.tgz
             rm -rf /tmp/ludo-ci
             mkdir -p /tmp/ludo-ci
+            rm -f /tmp/ludo-webout.tgz /tmp/ludo-src.tgz
             echo "drop ready whoami=$(whoami) home=$HOME"
 
-      - name: Copy tarball to server
+      - name: Copy tarballs to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          source: ludo-webout.tgz
-          # Prefer home drop dir to avoid sticky /tmp permission clashes
+          source: "ludo-webout.tgz,ludo-src.tgz"
           target: /tmp/ludo-ci/
           overwrite: true
           rm: true
@@ -61,41 +77,50 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           command_timeout: 20m
-          envs: DEPLOY_PATH
+          envs: DEPLOY_PATH,DEPLOY_SHA
           script: |
             set -euo pipefail
-            # Expand leading ~ (secrets often use ~/… which does not expand in quotes)
             case "${DEPLOY_PATH:-}" in
               "") echo "ERROR: DEPLOY_PATH secret is empty. Set it to /root/mk-projects/ludo" >&2; exit 1 ;;
               "~/"*) DEPLOY_PATH="$HOME/${DEPLOY_PATH#~/}" ;;
               "~") DEPLOY_PATH="$HOME" ;;
             esac
             echo "deploy path: $DEPLOY_PATH"
-            echo "whoami=$(whoami) home=$HOME pwd=$(pwd)"
+            echo "deploy sha: ${DEPLOY_SHA:-unknown}"
+            echo "whoami=$(whoami) home=$HOME"
+
             WEB_TGZ="/tmp/ludo-ci/ludo-webout.tgz"
-            if [ ! -f "$WEB_TGZ" ]; then
-              WEB_TGZ="$HOME/.ludo-ci/ludo-webout.tgz"
-            fi
-            if [ ! -f "$WEB_TGZ" ]; then
-              echo "ERROR: webout tarball missing under /tmp/ludo-ci or $HOME/.ludo-ci" >&2
-              ls -la /tmp/ludo-ci "$HOME/.ludo-ci" 2>&1 || true
+            SRC_TGZ="/tmp/ludo-ci/ludo-src.tgz"
+            if [ ! -f "$WEB_TGZ" ] || [ ! -f "$SRC_TGZ" ]; then
+              echo "ERROR: missing tarball(s) under /tmp/ludo-ci" >&2
+              ls -la /tmp/ludo-ci 2>&1 || true
               exit 1
             fi
+
+            mkdir -p "$DEPLOY_PATH"
+            # Preserve .env across sync
+            if [ -f "$DEPLOY_PATH/.env" ]; then
+              cp -a "$DEPLOY_PATH/.env" /tmp/ludo-ci/dotenv.bak
+            fi
+            tar xzf "$SRC_TGZ" -C "$DEPLOY_PATH"
+            if [ -f /tmp/ludo-ci/dotenv.bak ]; then
+              mv /tmp/ludo-ci/dotenv.bak "$DEPLOY_PATH/.env"
+            fi
+            if [ ! -f "$DEPLOY_PATH/.env" ]; then
+              echo "ERROR: $DEPLOY_PATH/.env missing after sync — create it on the server first" >&2
+              exit 1
+            fi
+
             cd "$DEPLOY_PATH"
-            if [ ! -d .git ]; then
-              echo "ERROR: $DEPLOY_PATH is not a git repo. Set DEPLOY_PATH to an absolute path like /root/mk-projects/ludo" >&2
-              ls -la "$DEPLOY_PATH" >&2 || true
-              exit 1
-            fi
-            git fetch origin main
-            git reset --hard origin/main
-            git log -1 --oneline
+            echo "synced files:"
+            ls -la
             KEEP_DAYS=7 sh deploy/deploy-web.sh "$DEPLOY_PATH" "$WEB_TGZ"
             docker compose up -d --build backend
             docker compose up -d nginx
@@ -104,7 +129,7 @@ jobs:
             for i in 1 2 3 4 5 6 7 8 9 10; do
               if curl -sf "http://127.0.0.1:${WEB_PORT}/api/health"; then
                 echo
-                echo "deploy ok at $(git rev-parse --short HEAD)"
+                echo "deploy ok sha=${DEPLOY_SHA:-unknown}"
                 exit 0
               fi
               sleep 3
