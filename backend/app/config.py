@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     MAX_VIEWERS_PER_MATCH: int = 16
     ACTION_QUEUE_MAX: int = 64
     PERSIST_EVERY_N_STEPS: int = 5
+    # How often to persist User.last_seen_at (seconds); off the request session.
+    PRESENCE_TOUCH_SECONDS: int = 60
+    # Per-socket send timeout during WS fanout (seconds).
+    WS_SEND_TIMEOUT_SECONDS: float = 2.0
 
     # Economy (coins are a soft currency; identical faucet/sink model to poker)
     SIGNUP_BONUS_COINS: int = 10000

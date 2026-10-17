@@ -1,11 +1,10 @@
 """Shared FastAPI dependencies."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.presence import schedule_touch
 from app.config import settings
 from app.core.security import AuthError, decode_access_token
 from app.database import get_session
@@ -26,13 +25,8 @@ async def get_current_user(
     user = await session.get(User, int(payload["sub"]))
     if user is None or user.is_banned:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
-    # refresh presence, throttled to ~30s
-    now = datetime.now(timezone.utc)
-    ls = user.last_seen_at
-    if ls is not None and ls.tzinfo is None:
-        ls = ls.replace(tzinfo=timezone.utc)
-    if ls is None or (now - ls).total_seconds() > 30:
-        user.last_seen_at = now
+    # presence write is throttled + off this session (avoids commit amplification)
+    schedule_touch(user.id)
     return user
 
 

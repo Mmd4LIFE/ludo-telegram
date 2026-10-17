@@ -50,13 +50,35 @@ class ConnectionHub:
         return bool(self._rooms.get(code))
 
     async def send_personalised(self, code: str, render) -> None:
+        """Fan out state to a room without stalling the match driver on a slow client.
+
+        Today Ludo has no hidden per-seat fields, so we build the payload once and
+        ``gather`` the sends with a short timeout. Dead sockets are pruned afterward.
+        """
         conns = list(self._rooms.get(code, set()))
-        dead: list[tuple[int, WebSocket]] = []
-        for user_id, ws in conns:
+        if not conns:
+            return
+        # One render for the room (personalization hook kept for future use).
+        try:
+            payload = render(conns[0][0])
+        except Exception:  # noqa: BLE001
+            logger.exception("render failed for match %s", code)
+            return
+
+        timeout = max(0.2, float(settings.WS_SEND_TIMEOUT_SECONDS))
+
+        async def _send(user_id: int, ws: WebSocket) -> tuple[int, WebSocket] | None:
             try:
-                await ws.send_json(render(user_id))
+                await asyncio.wait_for(ws.send_json(payload), timeout=timeout)
+                return None
             except Exception:  # noqa: BLE001
-                dead.append((user_id, ws))
+                return (user_id, ws)
+
+        results = await asyncio.gather(
+            *(_send(uid, ws) for uid, ws in conns),
+            return_exceptions=False,
+        )
+        dead = [item for item in results if item is not None]
         if dead:
             async with self._lock:
                 c = self._rooms.get(code)

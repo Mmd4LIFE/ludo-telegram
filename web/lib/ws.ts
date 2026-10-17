@@ -81,6 +81,7 @@ export class MatchSocket {
   private closed = false;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(code: string, onMsg: Handler) {
     this.code = code;
@@ -89,20 +90,35 @@ export class MatchSocket {
 
   connect(): void {
     if (this.closed) return;
+    this.stopPing();
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const url = `${proto}://${location.host}/ws/match/${this.code}?token=${getToken()}`;
     this.ws = new WebSocket(url);
-    this.ws.onmessage = (e) => this.onMsg(JSON.parse(e.data));
+    this.ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg?.type === "pong") return; // keepalive — ignore
+      this.onMsg(msg);
+    };
     this.ws.onopen = () => {
       this.attempt = 0;
+      // Stay under nginx proxy_read_timeout (120s) during quiet spells.
+      this.pingTimer = setInterval(() => this.send({ type: "ping" }), 30000);
     };
     this.ws.onclose = () => {
+      this.stopPing();
       if (this.closed) return;
       const exp = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** this.attempt);
       const jitter = Math.floor(Math.random() * 400);
       this.attempt += 1;
       this.reconnectTimer = setTimeout(() => this.connect(), exp + jitter);
     };
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
   }
 
   private send(obj: unknown): void {
@@ -130,6 +146,7 @@ export class MatchSocket {
 
   close(): void {
     this.closed = true;
+    this.stopPing();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
