@@ -36,15 +36,16 @@ jobs:
           set -euo pipefail
           tar czf ludo-webout.tgz -C webout .
           # Sync app code without wiping server secrets / local web build junk
+          # Only pack paths that exist in the repo checkout (docs/ may be gitignored)
+          SRC_PATHS=(backend deploy nginx docker-compose.yml)
+          for optional in .env.example README.md; do
+            [ -e "$optional" ] && SRC_PATHS+=("$optional")
+          done
           tar czf ludo-src.tgz \
             --exclude='.git' \
-            --exclude='web/node_modules' \
-            --exclude='web/out' \
-            --exclude='webout' \
-            --exclude='.env' \
             --exclude='*.pyc' \
             --exclude='__pycache__' \
-            backend deploy nginx docker-compose.yml .env.example README.md docs
+            "${SRC_PATHS[@]}"
           ls -lh ludo-webout.tgz ludo-src.tgz
 
       - name: Prepare remote drop dir
