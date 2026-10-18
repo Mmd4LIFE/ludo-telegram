@@ -121,23 +121,39 @@ async def credit_user(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    """Manually add coins to a player's wallet (ledger reason: admin_credit)."""
+    """Manually adjust a player's wallet. Positive = credit, negative = debit."""
     amount = int(body.amount)
-    if amount < 1:
-        raise HTTPException(400, "Amount must be at least 1")
+    if amount == 0:
+        raise HTTPException(400, "Amount must be non-zero")
     target = await session.get(User, user_id)
     if target is None or target.is_bot:
         raise HTTPException(404, "User not found")
     note = (body.note or "").strip()[:120] or None
-    coins = await ledger.credit(
-        session,
-        target.id,
-        amount,
-        reason="admin_credit",
-        ref_type="admin",
-        ref_id=admin.id,
-        meta={"admin_id": admin.id, "note": note},
-    )
+    meta = {"admin_id": admin.id, "note": note}
+    try:
+        if amount > 0:
+            coins = await ledger.credit(
+                session,
+                target.id,
+                amount,
+                reason="admin_credit",
+                ref_type="admin",
+                ref_id=admin.id,
+                meta=meta,
+            )
+        else:
+            coins = await ledger.debit(
+                session,
+                target.id,
+                abs(amount),
+                reason="admin_debit",
+                ref_type="admin",
+                ref_id=admin.id,
+                meta=meta,
+                floor_zero=False,
+            )
+    except ledger.InsufficientFunds as e:
+        raise HTTPException(400, "Not enough coins to debit") from e
     await session.commit()
     return AdminCreditOut(user_id=target.id, coins=coins, amount=amount)
 

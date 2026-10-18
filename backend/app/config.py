@@ -53,9 +53,10 @@ class Settings(BaseSettings):
     WS_SEND_TIMEOUT_SECONDS: float = 2.0
 
     # Economy (coins are a soft currency; identical faucet/sink model to poker)
-    SIGNUP_BONUS_COINS: int = 10000
-    DAILY_REWARD_COINS: int = 1000
-    BOT_START_BONUS: int = 2000
+    # New accounts start at 0 — coins come from play, Stars shop, gifts, or admin.
+    SIGNUP_BONUS_COINS: int = 0
+    DAILY_REWARD_COINS: int = 0
+    BOT_START_BONUS: int = 0
 
     # Matches / rooms
     MAX_ACTIVE_ROOMS_PER_USER: int = 3

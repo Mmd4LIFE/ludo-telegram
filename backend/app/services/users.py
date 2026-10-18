@@ -36,12 +36,13 @@ async def get_or_create_from_telegram(
     )
     session.add(user)
     await session.flush()
-    await ledger.credit(
-        session,
-        user.id,
-        settings.SIGNUP_BONUS_COINS,
-        reason="signup",
-    )
+    if settings.SIGNUP_BONUS_COINS > 0:
+        await ledger.credit(
+            session,
+            user.id,
+            settings.SIGNUP_BONUS_COINS,
+            reason="signup",
+        )
 
     if referral:
         await _apply_referral(session, user, referral)

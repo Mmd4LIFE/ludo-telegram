@@ -2918,7 +2918,7 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
                   onChange={(e) =>
                     setCreditAmt((m) => ({ ...m, [u.id]: e.target.value }))
                   }
-                  placeholder="Add coins"
+                  placeholder="+add / −remove"
                   inputMode="numeric"
                   className="h-8 flex-1 rounded-lg bg-secondary px-2 text-xs outline-none ring-1 ring-white/10"
                 />
@@ -2928,8 +2928,8 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
                   className="h-8 shrink-0 rounded-lg bg-primary/20 px-2.5 text-[11px] font-bold text-primary ring-1 ring-primary/30 disabled:opacity-50"
                   onClick={async () => {
                     const amt = Number(creditAmt[u.id]);
-                    if (!Number.isFinite(amt) || amt < 1) {
-                      setErr("Enter a positive amount");
+                    if (!Number.isFinite(amt) || amt === 0) {
+                      setErr("Enter a non-zero amount (negative to remove)");
                       return;
                     }
                     setCreditBusy(u.id);
@@ -2948,7 +2948,7 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
                     }
                   }}
                 >
-                  {creditBusy === u.id ? "…" : "+ Add"}
+                  {creditBusy === u.id ? "…" : "Apply"}
                 </button>
               </div>
             </div>
@@ -3919,8 +3919,11 @@ const REASON_LABEL: Record<string, string> = {
   transfer_in: "Received",
   transfer_refund: "Gift refund",
   admin_credit: "Admin credit",
+  admin_debit: "Admin debit",
   stars_purchase: "Stars purchase",
   opening_balance: "Opening balance",
+  signup: "Signup bonus",
+  bot_start: "Welcome bonus",
 };
 
 function reasonLabel(reason: string): string {

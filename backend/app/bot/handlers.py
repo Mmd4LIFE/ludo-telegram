@@ -63,9 +63,10 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
         )
         if not user.bot_started:
             user.bot_started = True
-            await ledger.credit(
-                session, user.id, settings.BOT_START_BONUS, reason="bot_start"
-            )
+            if settings.BOT_START_BONUS > 0:
+                await ledger.credit(
+                    session, user.id, settings.BOT_START_BONUS, reason="bot_start"
+                )
         await session.commit()
 
     if room:
