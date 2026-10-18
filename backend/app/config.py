@@ -28,8 +28,17 @@ class Settings(BaseSettings):
     # never sent to the client; all calls are proxied by the backend.
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    # Insights assistant: chat model (falls back to OPENAI_MODEL) + embedding model for RAG
+    OPENAI_INSIGHTS_MODEL: str = ""
+    OPENAI_EMBED_MODEL: str = "text-embedding-3-small"
     # anchor for "today"/"this week" in the Insights assistant (minutes offset from UTC)
     INSIGHTS_TZ_OFFSET_MINUTES: int = 0
+    # Read-only Postgres role used by Insights + the native SQL tab. Created/synced at boot;
+    # the password is derived from SECRET_KEY when left empty.
+    INSIGHTS_RO_ROLE: str = "ludo_ro"
+    INSIGHTS_RO_PASSWORD: str = ""
+    INSIGHTS_SQL_TIMEOUT_MS: int = 15000
+    INSIGHTS_MAX_ROWS: int = 1000
 
     # Database
     POSTGRES_USER: str = "ludo"

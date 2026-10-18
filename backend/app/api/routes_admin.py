@@ -21,6 +21,7 @@ from app.database import Base, get_session
 from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate, Poll, AppConfig
 from app.models import ChatMessage as ChatRow
 from app import appconfig
+from app.insights.readonly import REDACTED_COLUMNS
 from app.services import ledger
 from app.schemas import (
     AddPollTemplateRequest,
@@ -48,7 +49,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # never name an arbitrary relation). Sensitive columns are redacted even for admins:
 # telegram_id NEVER leaves the server, per the project's hard privacy rule.
 _TABLES = Base.metadata.tables
-_REDACT = {"users": {"telegram_id"}}
+_REDACT = REDACTED_COLUMNS
 _DATA_MAX = 100
 
 

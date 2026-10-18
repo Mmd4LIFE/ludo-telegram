@@ -1,6 +1,7 @@
 """FastAPI application entrypoint. Runs the REST API, the WebSocket and the bot."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,7 @@ from app.api import (
     routes_matches,
     routes_profile,
     routes_shop,
+    routes_sql,
     routes_stats,
     routes_wallet,
     routes_ws,
@@ -31,15 +33,20 @@ logger = logging.getLogger("ludo")
 async def lifespan(app: FastAPI):
     from app.bot.runner import setup_bot, shutdown_bot
     from app.game.manager import manager
+    from app.insights import bootstrap as insights_bootstrap
+    from app.insights.readonly import close_pool as close_insights_pool
 
     try:
         await setup_bot()
     except Exception:  # noqa: BLE001
         logger.exception("Bot setup failed (continuing without bot)")
     manager.start_janitor()
+    insights_task = asyncio.create_task(insights_bootstrap())
     yield
+    insights_task.cancel()
     await manager.shutdown()
     await shutdown_bot()
+    await close_insights_pool()
 
 
 app = FastAPI(title="Ludo Board", version="0.1.0", lifespan=lifespan)
@@ -60,6 +67,7 @@ for module in (
     routes_ws,
     routes_admin,
     routes_insights,
+    routes_sql,
     routes_wallet,
     routes_shop,
 ):

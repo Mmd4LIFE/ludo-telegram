@@ -20,9 +20,9 @@ function setToken(t: string): void {
 
 const FETCH_TIMEOUT_MS = 8000;
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, timeoutMs = FETCH_TIMEOUT_MS): Promise<T> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(path, {
       method,
@@ -161,47 +161,117 @@ export interface AdminReaction {
 
 export interface InsightStep {
   seq: number;
-  stage: string;
-  status: string; // ok | skip | error | clarify
+  stage: string; // retrieve | llm | search_knowledge | describe_table | run_sql | answer
+  status: string; // ok | error
   duration_ms: number;
   detail: Record<string, unknown>;
 }
 
+export interface SqlColumn {
+  name: string;
+  type: string;
+}
+
+export interface SqlTable {
+  columns: SqlColumn[];
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+  duration_ms: number;
+}
+
+export interface InsightChart {
+  type: "bar" | "line";
+  x: string;
+  y: string;
+}
+
+export interface InsightSource {
+  key: string;
+  title: string;
+  kind: string;
+  score: number;
+}
+
 export interface InsightAnswer {
   query_id: number;
-  status: string; // answered | clarified | refused | error
+  status: string; // answered | error
+  question: string;
   answer: string;
-  understood: {
-    metric?: string;
-    capability?: string;
-    params?: Record<string, unknown>;
-    entity?: { id: number; name: string } | null;
-    period_label?: string;
-  };
-  result: Record<string, unknown> | null;
-  candidates: { id: number; name: string; username: string | null; level: number; games_won: number }[];
+  sql: string | null;
+  table: SqlTable | null;
+  chart: InsightChart | null;
+  follow_ups: string[];
+  sources: InsightSource[];
   steps: InsightStep[];
   model: string;
   latency_ms: number;
-}
-
-export interface InsightCapability {
-  name: string;
-  summary: string;
-  params: Record<string, unknown>;
-  examples: { q: string; call: Record<string, unknown> }[];
+  usage: Record<string, number>;
+  feedback: number | null;
+  error?: string | null;
+  created_at?: string | null;
 }
 
 export interface InsightLogRow {
   id: number;
   question: string;
   status: string;
-  metric: string | null;
-  capability: string | null;
   answer: string;
+  has_sql: boolean;
+  feedback: number | null;
   latency_ms: number;
   model: string;
   created_at: string | null;
+}
+
+export interface InsightStatus {
+  openai: boolean;
+  model: string;
+  embed_model: string;
+  tz_offset: string;
+  readonly: { role: string; ready: boolean; error: string | null };
+  knowledge: Record<string, { count: number; embedded: number }>;
+}
+
+export interface KnowledgeEntry {
+  id: number;
+  key: string;
+  kind: string; // table | doc | example | note
+  source: string; // auto | curated | learned | admin
+  title: string;
+  content: string;
+  enabled: boolean;
+  embedded: boolean;
+  editable: boolean;
+  updated_at: string | null;
+}
+
+export interface SqlRunResult extends Partial<SqlTable> {
+  ok: boolean;
+  error: string | null;
+  run_id: number;
+  max_rows: number;
+}
+
+export interface SqlHistoryRow {
+  id: number;
+  sql: string;
+  status: string; // ok | error | rejected
+  row_count: number;
+  duration_ms: number;
+  error: string | null;
+  mine: boolean;
+  created_at: string | null;
+}
+
+export interface SchemaTable {
+  name: string;
+  doc: string;
+  internal: boolean;
+  columns: { name: string; type: string; nullable: boolean; pk: boolean; fk: string | null; note: string }[];
+  hidden_columns: string[];
+  referenced_by: string[];
+  rows: number | null;
 }
 
 export interface AppConfig {
@@ -446,14 +516,45 @@ export const api = {
     req<AdminChatView>("GET", `/api/admin/matches/${encodeURIComponent(ref)}/chat`),
   adminAiChat: (messages: { role: string; content: string }[]) =>
     req<{ reply: string; model: string }>("POST", "/api/admin/ai/chat", { messages }),
-  adminInsightsAsk: (question: string) =>
-    req<InsightAnswer>("POST", "/api/admin/insights/ask", { question }),
-  adminInsightsCapabilities: () =>
-    req<InsightCapability[]>("GET", "/api/admin/insights/capabilities"),
+  adminInsightsAsk: (
+    question: string,
+    history: { question: string; answer: string; sql: string | null }[] = [],
+  ) => req<InsightAnswer>("POST", "/api/admin/insights/ask", { question, history }, 120_000),
+  adminInsightsStatus: () => req<InsightStatus>("GET", "/api/admin/insights/status"),
   adminInsightsLog: (limit = 30) =>
     req<InsightLogRow[]>("GET", `/api/admin/insights/log?limit=${limit}`),
   adminInsightsQuery: (id: number) =>
-    req<{ query: Record<string, unknown>; steps: InsightStep[] }>("GET", `/api/admin/insights/queries/${id}`),
+    req<InsightAnswer>("GET", `/api/admin/insights/queries/${id}`),
+  adminInsightsFeedback: (id: number, value: -1 | 0 | 1) =>
+    req<{ ok: boolean; feedback: number | null }>(
+      "POST",
+      `/api/admin/insights/queries/${id}/feedback`,
+      { value },
+      30_000,
+    ),
+  adminKnowledge: (kind?: string) =>
+    req<KnowledgeEntry[]>("GET", `/api/admin/insights/knowledge${kind ? `?kind=${kind}` : ""}`),
+  adminAddKnowledge: (title: string, content: string) =>
+    req<KnowledgeEntry>("POST", "/api/admin/insights/knowledge", { title, content }, 30_000),
+  adminPatchKnowledge: (id: number, patch: { enabled?: boolean; title?: string; content?: string }) =>
+    req<KnowledgeEntry>("PATCH", `/api/admin/insights/knowledge/${id}`, patch, 30_000),
+  adminDeleteKnowledge: (id: number) =>
+    req<{ ok: boolean }>("DELETE", `/api/admin/insights/knowledge/${id}`),
+  adminReindexKnowledge: () =>
+    req<{ chunks: number; changed: number; removed: number; embedded: number }>(
+      "POST",
+      "/api/admin/insights/reindex",
+      undefined,
+      90_000,
+    ),
+  adminSqlRun: (sql: string, max_rows = 500) =>
+    req<SqlRunResult>("POST", "/api/admin/sql/run", { sql, max_rows }, 60_000),
+  adminSqlHistory: (limit = 30) => req<SqlHistoryRow[]>("GET", `/api/admin/sql/history?limit=${limit}`),
+  adminSqlSchema: () =>
+    req<{ tables: SchemaTable[]; readonly: { ready: boolean; error: string | null }; max_rows: number }>(
+      "GET",
+      "/api/admin/sql/schema",
+    ),
   adminConfigs: () => req<AppConfig[]>("GET", "/api/admin/configs"),
   adminSetConfig: (key: string, value: number) =>
     req<AppConfig[]>("POST", `/api/admin/configs/${key}`, { value }),
