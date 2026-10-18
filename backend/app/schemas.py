@@ -394,3 +394,80 @@ class DiceEntry(BaseModel):
 class DiceState(BaseModel):
     cooldown: float                 # seconds between rolls
     ranking: list[DiceEntry] = []
+
+
+# --- wallet / shop -----------------------------------------------------------
+class BalanceHistoryRow(BaseModel):
+    id: int
+    delta: int
+    balance_after: int
+    reason: str
+    ref_type: str | None = None
+    ref_id: int | None = None
+    created_at: str | None = None
+
+
+class WalletLookup(BaseModel):
+    id: int
+    first_name: str
+
+
+class TransferRequest(BaseModel):
+    to_user_id: int
+    amount: int
+    note: str | None = None
+
+
+class GiftCreateRequest(BaseModel):
+    amount: int
+    note: str | None = None
+
+
+class GiftClaimRequest(BaseModel):
+    token: str
+
+
+class TransferOut(BaseModel):
+    id: int
+    from_user_id: int
+    to_user_id: int | None = None
+    amount: int
+    status: str
+    note: str | None = None
+    claim_token: str | None = None
+    share_url: str | None = None
+    created_at: str | None = None
+    claimed_at: str | None = None
+    coins: int  # sender/claimer balance after
+
+
+class AdminCreditRequest(BaseModel):
+    amount: int
+    note: str | None = None
+
+
+class AdminCreditOut(BaseModel):
+    user_id: int
+    coins: int
+    amount: int
+
+
+class StarsPack(BaseModel):
+    stars: int
+    coins: int
+
+
+class StarsPacksOut(BaseModel):
+    coins_per_star: int
+    packs: list[StarsPack]
+
+
+class StarsInvoiceRequest(BaseModel):
+    pack_stars: int
+
+
+class StarsInvoiceOut(BaseModel):
+    invoice_link: str
+    payment_id: int
+    stars: int
+    coins: int

@@ -13,7 +13,9 @@ from app.api import (
     routes_insights,
     routes_matches,
     routes_profile,
+    routes_shop,
     routes_stats,
+    routes_wallet,
     routes_ws,
 )
 from app.config import settings
@@ -50,7 +52,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (routes_auth, routes_profile, routes_matches, routes_stats, routes_ws, routes_admin, routes_insights):
+for module in (
+    routes_auth,
+    routes_profile,
+    routes_matches,
+    routes_stats,
+    routes_ws,
+    routes_admin,
+    routes_insights,
+    routes_wallet,
+    routes_shop,
+):
     app.include_router(module.router)
 
 

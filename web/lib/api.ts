@@ -308,6 +308,30 @@ export interface AdminKnockRow {
   potential: number;
 }
 
+export interface BalanceHistoryRow {
+  id: number;
+  delta: number;
+  balance_after: number;
+  reason: string;
+  ref_type: string | null;
+  ref_id: number | null;
+  created_at: string | null;
+}
+
+export interface TransferResult {
+  id: number;
+  from_user_id: number;
+  to_user_id: number | null;
+  amount: number;
+  status: string;
+  note: string | null;
+  claim_token: string | null;
+  share_url: string | null;
+  created_at: string | null;
+  claimed_at: string | null;
+  coins: number;
+}
+
 // Authenticate via Telegram initData; falls back to dev login in a plain browser.
 export async function authenticate(): Promise<Profile> {
   const initData = getInitData();
@@ -373,6 +397,43 @@ export const api = {
   adminKnocks: () => req<AdminKnockRow[]>("GET", "/api/admin/knocks"),
   adminUsers: (q?: string) =>
     req<AdminUser[]>("GET", `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  adminCreditUser: (userId: number, amount: number, note?: string) =>
+    req<{ user_id: number; coins: number; amount: number }>(
+      "POST",
+      `/api/admin/users/${userId}/credit`,
+      { amount, note: note ?? null },
+    ),
+  walletHistory: (limit = 40, offset = 0) =>
+    req<BalanceHistoryRow[]>(
+      "GET",
+      `/api/wallet/history?limit=${limit}&offset=${offset}`,
+    ),
+  walletLookup: (id: number) =>
+    req<{ id: number; first_name: string }>("GET", `/api/wallet/lookup?id=${id}`),
+  walletTransfer: (to_user_id: number, amount: number, note?: string) =>
+    req<TransferResult>("POST", "/api/wallet/transfer", {
+      to_user_id,
+      amount,
+      note: note ?? null,
+    }),
+  walletCreateGift: (amount: number, note?: string) =>
+    req<TransferResult>("POST", "/api/wallet/gifts", {
+      amount,
+      note: note ?? null,
+    }),
+  walletClaimGift: (token: string) =>
+    req<TransferResult>("POST", "/api/wallet/gifts/claim", { token }),
+  starsPacks: () =>
+    req<{ coins_per_star: number; packs: { stars: number; coins: number }[] }>(
+      "GET",
+      "/api/shop/stars/packs",
+    ),
+  starsInvoice: (pack_stars: number) =>
+    req<{ invoice_link: string; payment_id: number; stars: number; coins: number }>(
+      "POST",
+      "/api/shop/stars/invoice",
+      { pack_stars },
+    ),
   adminReactions: () => req<AdminReaction[]>("GET", "/api/admin/reactions"),
   adminAddReaction: (emoji: string) =>
     req<AdminReaction[]>("POST", "/api/admin/reactions", { emoji }),

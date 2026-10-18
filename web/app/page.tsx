@@ -75,12 +75,15 @@ import {
   Poll,
   PollTemplate,
   Profile,
+  BalanceHistoryRow,
 } from "@/lib/api";
 import {
   getInitData,
   haptic,
   initTelegram,
   notify,
+  openInvoice,
+  shareGift,
   shareRoom,
   startParam,
 } from "@/lib/telegram";
@@ -102,7 +105,7 @@ const COLOR_HEX: Record<string, string> = {
 };
 
 type Room = { code: string; host: boolean };
-type Tab = "shop" | "friends" | "home" | "cards" | "me";
+type Tab = "shop" | "wallet" | "home" | "cards" | "me";
 type Clock = { deadline: number | null; now: number; recvAt: number; turnSeconds: number };
 // this game's per-seat scoreboard, streamed on every state update
 type GameStats = {
@@ -289,6 +292,17 @@ function Home() {
               else setRoom({ code, host: m.created_by === p.id });
             })
             .catch((e) => setError(String(e)));
+        } else if (sp && sp.startsWith("gift-")) {
+          const token = sp.slice(5);
+          api
+            .walletClaimGift(token)
+            .then((r) => {
+              setProfile({ ...p, coins: r.coins });
+              setNotice(`Gift claimed — +${r.amount.toLocaleString()} coins`);
+              notify("success");
+              setView("wallet");
+            })
+            .catch((e) => setNotice(String(e).replace(/^\d+:\s*/, "") || "Could not claim gift"));
         }
       })
       .catch((e) => setError(String(e)));
@@ -413,8 +427,12 @@ function Home() {
       {view === "me" && (
         <MeScreen profile={profile} onAdmin={() => setShowAdmin(true)} onProfile={setProfile} />
       )}
-      {view === "shop" && <ComingSoon title="Shop" />}
-      {view === "friends" && <ComingSoon title="Friends" />}
+      {view === "shop" && (
+        <ShopScreen profile={profile} onProfile={setProfile} onNotice={setNotice} />
+      )}
+      {view === "wallet" && (
+        <WalletScreen profile={profile} onProfile={setProfile} onNotice={setNotice} />
+      )}
       {view === "cards" && <CardsGallery />}
       <BottomNav view={view} onChange={setView} />
       {noticeBanner}
@@ -2756,6 +2774,8 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
   const [tab, setTab] = useState<AdminTab>("overview");
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [creditAmt, setCreditAmt] = useState<Record<number, string>>({});
+  const [creditBusy, setCreditBusy] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
@@ -2864,32 +2884,74 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
             <div className="py-3 text-center text-xs text-muted-foreground">No players found.</div>
           )}
           {users.map((u) => (
-            <div key={u.id} className="flex items-center gap-2.5 rounded-xl bg-secondary/50 px-2.5 py-2">
-              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-secondary text-xs font-bold ring-1 ring-white/10">
-                {(u.first_name || "P").slice(0, 1).toUpperCase()}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span className="truncate text-sm font-semibold">{u.first_name || "Player"}</span>
-                  {u.is_banned && (
-                    <span className="rounded-full bg-red/20 px-1.5 text-[9px] font-bold text-red">
-                      BANNED
-                    </span>
-                  )}
-                  {!u.bot_started && (
-                    <span className="rounded-full bg-white/10 px-1.5 text-[9px] font-bold text-muted-foreground">
-                      NO /START
-                    </span>
-                  )}
+            <div key={u.id} className="rounded-xl bg-secondary/50 px-2.5 py-2">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-secondary text-xs font-bold ring-1 ring-white/10">
+                  {(u.first_name || "P").slice(0, 1).toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm font-semibold">{u.first_name || "Player"}</span>
+                    <span className="text-[10px] tabular-nums text-muted-foreground">#{u.id}</span>
+                    {u.is_banned && (
+                      <span className="rounded-full bg-red/20 px-1.5 text-[9px] font-bold text-red">
+                        BANNED
+                      </span>
+                    )}
+                    {!u.bot_started && (
+                      <span className="rounded-full bg-white/10 px-1.5 text-[9px] font-bold text-muted-foreground">
+                        NO /START
+                      </span>
+                    )}
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground">
+                    {u.username ? `@${u.username} · ` : ""}lvl {u.level} · {u.games_won}/
+                    {u.games_played} won · seen {ago(u.last_seen_at)}
+                  </div>
                 </div>
-                <div className="truncate text-[10px] text-muted-foreground">
-                  {u.username ? `@${u.username} · ` : ""}lvl {u.level} · {u.games_won}/
-                  {u.games_played} won · seen {ago(u.last_seen_at)}
-                </div>
+                <span className="shrink-0 text-xs font-bold tabular-nums text-primary">
+                  {u.coins.toLocaleString()}
+                </span>
               </div>
-              <span className="shrink-0 text-xs font-bold tabular-nums text-primary">
-                {u.coins.toLocaleString()}
-              </span>
+              <div className="mt-1.5 flex items-center gap-1.5 pl-10">
+                <input
+                  value={creditAmt[u.id] ?? ""}
+                  onChange={(e) =>
+                    setCreditAmt((m) => ({ ...m, [u.id]: e.target.value }))
+                  }
+                  placeholder="Add coins"
+                  inputMode="numeric"
+                  className="h-8 flex-1 rounded-lg bg-secondary px-2 text-xs outline-none ring-1 ring-white/10"
+                />
+                <button
+                  type="button"
+                  disabled={creditBusy === u.id}
+                  className="h-8 shrink-0 rounded-lg bg-primary/20 px-2.5 text-[11px] font-bold text-primary ring-1 ring-primary/30 disabled:opacity-50"
+                  onClick={async () => {
+                    const amt = Number(creditAmt[u.id]);
+                    if (!Number.isFinite(amt) || amt < 1) {
+                      setErr("Enter a positive amount");
+                      return;
+                    }
+                    setCreditBusy(u.id);
+                    setErr(null);
+                    try {
+                      const r = await api.adminCreditUser(u.id, amt);
+                      setUsers((list) =>
+                        list.map((x) => (x.id === u.id ? { ...x, coins: r.coins } : x)),
+                      );
+                      setCreditAmt((m) => ({ ...m, [u.id]: "" }));
+                      api.adminStats().then(setStats).catch(() => {});
+                    } catch (e) {
+                      setErr(String(e));
+                    } finally {
+                      setCreditBusy(null);
+                    }
+                  }}
+                >
+                  {creditBusy === u.id ? "…" : "+ Add"}
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -3790,7 +3852,7 @@ function ChatBrowser() {
 
 const TABS: { view: Tab; label: string; icon: React.ElementType }[] = [
   { view: "shop", label: "Shop", icon: ShoppingBag },
-  { view: "friends", label: "Friends", icon: Users },
+  { view: "wallet", label: "Wallet", icon: Coins },
   { view: "home", label: "Play", icon: Gamepad2 },
   { view: "cards", label: "Cards", icon: Layers3 },
   { view: "me", label: "Me", icon: User },
@@ -3839,15 +3901,374 @@ function BottomNav({ view, onChange }: { view: Tab; onChange: (v: Tab) => void }
   );
 }
 
-function ComingSoon({ title }: { title: string }) {
+const REASON_LABEL: Record<string, string> = {
+  bot_start: "Welcome bonus",
+  referral_bonus: "Referral bonus",
+  entry_fee: "Room entry fee",
+  placement: "Match placement",
+  couldve: "Could've bonus",
+  jackpot: "Jackpot",
+  reroll: "Dice reroll",
+  peek: "Card peek",
+  insurance: "Insurance",
+  insurance_payout: "Insurance payout",
+  hint: "Move hint",
+  buy_card: "Bonus card",
+  dice_skin: "Dice skin",
+  card_boost: "Card boost",
+  transfer_out: "Sent / gift",
+  transfer_in: "Received",
+  transfer_refund: "Gift refund",
+  admin_credit: "Admin credit",
+  stars_purchase: "Stars purchase",
+  opening_balance: "Opening balance",
+};
+
+function reasonLabel(reason: string): string {
+  return REASON_LABEL[reason] || reason.replace(/_/g, " ");
+}
+
+function WalletScreen({
+  profile,
+  onProfile,
+  onNotice,
+}: {
+  profile: Profile;
+  onProfile: (p: Profile) => void;
+  onNotice: (t: string) => void;
+}) {
+  const [history, setHistory] = useState<BalanceHistoryRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [toId, setToId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [lookup, setLookup] = useState<{ id: number; first_name: string } | null>(null);
+  const [giftAmount, setGiftAmount] = useState("");
+  const [giftNote, setGiftNote] = useState("");
+  const [lastGiftUrl, setLastGiftUrl] = useState<string | null>(null);
+  const [lastGiftToken, setLastGiftToken] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    setLoading(true);
+    api
+      .walletHistory()
+      .then(setHistory)
+      .catch(() => setHistory([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh, profile.coins]);
+
+  const doLookup = async () => {
+    const id = Number(toId);
+    if (!Number.isFinite(id) || id < 1) {
+      onNotice("Enter a valid wallet id");
+      return;
+    }
+    setBusy(true);
+    try {
+      setLookup(await api.walletLookup(id));
+    } catch (e) {
+      setLookup(null);
+      onNotice(String(e).replace(/^\d+:\s*/, "") || "Wallet not found");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doTransfer = async () => {
+    if (!lookup) return;
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt < 1) {
+      onNotice("Enter an amount");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.walletTransfer(lookup.id, amt, note || undefined);
+      onProfile({ ...profile, coins: r.coins });
+      onNotice(`Sent ${amt.toLocaleString()} coins to ${lookup.first_name}`);
+      notify("success");
+      setAmount("");
+      setNote("");
+      setLookup(null);
+      setToId("");
+      refresh();
+    } catch (e) {
+      onNotice(String(e).replace(/^\d+:\s*/, "") || "Transfer failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doGift = async () => {
+    const amt = Number(giftAmount);
+    if (!Number.isFinite(amt) || amt < 1) {
+      onNotice("Enter an amount");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.walletCreateGift(amt, giftNote || undefined);
+      onProfile({ ...profile, coins: r.coins });
+      setLastGiftUrl(r.share_url);
+      setLastGiftToken(r.claim_token);
+      onNotice("Gift created — share the link");
+      notify("success");
+      setGiftAmount("");
+      setGiftNote("");
+      refresh();
+      if (r.claim_token) {
+        shareGift(
+          profile.bot_username,
+          r.claim_token,
+          `I sent you ${amt.toLocaleString()} Ludo coins! Tap to claim.`,
+        );
+      }
+    } catch (e) {
+      onNotice(String(e).replace(/^\d+:\s*/, "") || "Gift failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Shell className="pb-28">
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
-        <Sparkles className="size-10 text-primary" />
-        <div className="text-lg font-extrabold">{title}</div>
-        <p className="max-w-[240px] text-sm text-muted-foreground">
-          Coming in a future update.
+      <Card>
+        <SectionLabel>Your wallet</SectionLabel>
+        <div className="mt-2 flex items-end justify-between gap-3">
+          <div>
+            <div className="text-2xl font-extrabold tabular-nums">
+              {profile.coins.toLocaleString()}
+            </div>
+            <div className="text-[11px] text-muted-foreground">coins</div>
+          </div>
+          <div className="rounded-xl bg-secondary/60 px-3 py-2 text-right ring-1 ring-white/10">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              Wallet id
+            </div>
+            <div className="text-sm font-extrabold tabular-nums">{profile.id}</div>
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <SectionLabel>Send coins</SectionLabel>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Transfer to another player&apos;s wallet id (shown on their Me / Wallet tab).
         </p>
+        <div className="mt-2 flex gap-2">
+          <input
+            value={toId}
+            onChange={(e) => {
+              setToId(e.target.value);
+              setLookup(null);
+            }}
+            placeholder="Wallet id"
+            inputMode="numeric"
+            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+          />
+          <Button variant="secondary" disabled={busy} onClick={doLookup}>
+            Look up
+          </Button>
+        </div>
+        {lookup && (
+          <div className="mt-2 rounded-xl bg-secondary/50 px-3 py-2 text-sm ring-1 ring-white/10">
+            Send to <span className="font-bold">{lookup.first_name}</span>{" "}
+            <span className="text-muted-foreground">#{lookup.id}</span>
+          </div>
+        )}
+        <div className="mt-2 flex gap-2">
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="Amount"
+            inputMode="numeric"
+            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+          />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Note (optional)"
+            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+          />
+        </div>
+        <Button className="mt-2 w-full" disabled={busy || !lookup} onClick={doTransfer}>
+          <Send className="size-4" /> Send
+        </Button>
+      </Card>
+
+      <Card>
+        <SectionLabel>Gift link</SectionLabel>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Coins are held until someone claims via Telegram. Unclaimed gifts expire in 7 days.
+        </p>
+        <div className="mt-2 flex gap-2">
+          <input
+            value={giftAmount}
+            onChange={(e) => setGiftAmount(e.target.value)}
+            placeholder="Amount"
+            inputMode="numeric"
+            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+          />
+          <input
+            value={giftNote}
+            onChange={(e) => setGiftNote(e.target.value)}
+            placeholder="Note (optional)"
+            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
+          />
+        </div>
+        <Button className="mt-2 w-full" variant="secondary" disabled={busy} onClick={doGift}>
+          <Share2 className="size-4" /> Create &amp; share gift
+        </Button>
+        {lastGiftUrl && lastGiftToken && (
+          <button
+            type="button"
+            className="mt-2 w-full truncate rounded-xl bg-secondary/50 px-3 py-2 text-left text-[11px] text-muted-foreground ring-1 ring-white/10"
+            onClick={() => {
+              shareGift(profile.bot_username, lastGiftToken, "Claim your Ludo coins!");
+            }}
+          >
+            Share again · {lastGiftUrl}
+          </button>
+        )}
+      </Card>
+
+      <Card>
+        <SectionLabel>Balance history</SectionLabel>
+        <div className="no-scrollbar mt-2 flex max-h-[40vh] flex-col gap-1.5 overflow-y-auto">
+          {loading && (
+            <div className="py-4 text-center text-xs text-muted-foreground">Loading…</div>
+          )}
+          {!loading && history.length === 0 && (
+            <div className="py-4 text-center text-xs text-muted-foreground">No movements yet.</div>
+          )}
+          {history.map((h) => (
+            <div
+              key={h.id}
+              className="flex items-center justify-between gap-2 rounded-xl bg-secondary/50 px-2.5 py-2"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold">{reasonLabel(h.reason)}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {h.created_at ? new Date(h.created_at).toLocaleString() : ""}
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div
+                  className={cn(
+                    "text-sm font-extrabold tabular-nums",
+                    h.delta >= 0 ? "text-emerald-400" : "text-red-400",
+                  )}
+                >
+                  {h.delta >= 0 ? "+" : ""}
+                  {h.delta.toLocaleString()}
+                </div>
+                <div className="text-[10px] tabular-nums text-muted-foreground">
+                  bal {h.balance_after.toLocaleString()}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </Shell>
+  );
+}
+
+function ShopScreen({
+  profile,
+  onProfile,
+  onNotice,
+}: {
+  profile: Profile;
+  onProfile: (p: Profile) => void;
+  onNotice: (t: string) => void;
+}) {
+  const [packs, setPacks] = useState<{ stars: number; coins: number }[]>([]);
+  const [rate, setRate] = useState(50);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .starsPacks()
+      .then((r) => {
+        setPacks(r.packs);
+        setRate(r.coins_per_star);
+      })
+      .catch(() => setPacks([]));
+  }, []);
+
+  const buy = async (stars: number) => {
+    setBusy(true);
+    try {
+      const inv = await api.starsInvoice(stars);
+      const status = await openInvoice(inv.invoice_link);
+      if (status === "paid") {
+        const me = await api.me();
+        onProfile(me);
+        onNotice(`+${inv.coins.toLocaleString()} coins added`);
+        notify("success");
+      } else if (status === "cancelled") {
+        onNotice("Payment cancelled");
+      } else if (status === "failed") {
+        onNotice("Payment failed");
+      } else {
+        // pending / opened outside — refresh shortly
+        setTimeout(() => api.me().then(onProfile).catch(() => {}), 2500);
+        onNotice("Finish payment in Telegram…");
+      }
+    } catch (e) {
+      onNotice(String(e).replace(/^\d+:\s*/, "") || "Could not start payment");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Shell className="pb-28">
+      <Card>
+        <SectionLabel>Buy coins</SectionLabel>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Pay with Telegram Stars. Rate: <span className="font-bold text-foreground">1★ = {rate} coins</span>.
+        </p>
+        <div className="mt-2 flex items-center gap-2 text-sm">
+          <Coins className="size-4 text-primary" />
+          <span className="font-extrabold tabular-nums">{profile.coins.toLocaleString()}</span>
+          <span className="text-muted-foreground">balance</span>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-2 gap-2">
+        {packs.map((p) => (
+          <button
+            key={p.stars}
+            disabled={busy}
+            onClick={() => {
+              haptic("medium");
+              buy(p.stars);
+            }}
+            className="flex flex-col items-start gap-1 rounded-2xl bg-card p-4 text-left ring-1 ring-white/10 transition active:scale-[0.98] disabled:opacity-50"
+          >
+            <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-300">
+              <Star className="size-3.5" /> {p.stars} Stars
+            </span>
+            <span className="text-lg font-extrabold tabular-nums">
+              {p.coins.toLocaleString()}
+            </span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              coins
+            </span>
+          </button>
+        ))}
+        {packs.length === 0 && (
+          <div className="col-span-2 py-8 text-center text-xs text-muted-foreground">
+            Loading packs…
+          </div>
+        )}
       </div>
     </Shell>
   );
@@ -3907,6 +4328,9 @@ function MeScreen({
         {profile.username && (
           <div className="text-xs text-muted-foreground">@{profile.username}</div>
         )}
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          Wallet id <span className="font-bold tabular-nums text-foreground">#{profile.id}</span>
+        </div>
         <div className="mt-3 flex items-center justify-center gap-2">
           <span className="rounded-full bg-secondary px-3 py-1 text-[11px] font-bold text-muted-foreground ring-1 ring-white/10">
             LVL {profile.level}

@@ -114,6 +114,12 @@ TUNABLE: dict[str, dict] = {
     "BOOST_TELEPORT_2": {"label": "Boost teleport 2 stars", "help": "", "default": 60, "min": 0, "max": 10000},
     "BOOST_SUMMON_2": {"label": "Boost summon 2", "help": "", "default": 80, "min": 0, "max": 10000},
     "BOOST_JACKPOT_250": {"label": "Boost jackpot 250", "help": "", "default": 50, "min": 0, "max": 10000},
+    # --- shop / Stars ------------------------------------------------------
+    "COINS_PER_STAR": {
+        "label": "Coins per Telegram Star",
+        "help": "How many coins one Star buys. Packs are 50/100/250/500 Stars × this rate.",
+        "default": 50, "min": 1, "max": 10000,
+    },
 }
 
 

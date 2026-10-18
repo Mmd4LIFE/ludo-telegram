@@ -7,6 +7,7 @@ from app.models.poll import PollTemplate, Poll, PollOption, PollVote
 from app.models.config import AppConfig
 from app.models.insights import InsightsQuery, InsightsStep
 from app.models.ledger import Balance, BalanceHistory
+from app.models.wallet import Transfer, StarPayment, TransferStatus, StarPaymentStatus
 
 __all__ = [
     "User", "Match", "MatchSeat", "MatchStatus",
@@ -15,4 +16,5 @@ __all__ = [
     "PollTemplate", "Poll", "PollOption", "PollVote",
     "AppConfig", "InsightsQuery", "InsightsStep",
     "Balance", "BalanceHistory",
+    "Transfer", "StarPayment", "TransferStatus", "StarPaymentStatus",
 ]

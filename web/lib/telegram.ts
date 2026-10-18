@@ -14,6 +14,10 @@ export interface TelegramWebApp {
     notificationOccurred: (s: string) => void;
   };
   openTelegramLink?: (url: string) => void;
+  openInvoice?: (
+    url: string,
+    callback?: (status: "paid" | "cancelled" | "failed" | "pending") => void,
+  ) => void;
   setHeaderColor?: (c: string) => void;
   setBackgroundColor?: (c: string) => void;
   disableVerticalSwipes?: () => void;
@@ -87,4 +91,31 @@ export function shareRoom(botUsername: string, code: string, text: string): void
   openTelegramLink(
     `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`
   );
+}
+
+/** Deep link that opens the Mini App to claim a coin gift. */
+export function giftInviteLink(botUsername: string, token: string): string {
+  return `https://t.me/${botUsername}?start=gift-${token}`;
+}
+
+export function shareGift(botUsername: string, token: string, text: string): void {
+  const url = giftInviteLink(botUsername, token);
+  openTelegramLink(
+    `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`
+  );
+}
+
+/** Open a Stars invoice; resolves with Telegram's payment status. */
+export function openInvoice(
+  invoiceLink: string,
+): Promise<"paid" | "cancelled" | "failed" | "pending"> {
+  return new Promise((resolve) => {
+    const w = tg();
+    if (!w?.openInvoice) {
+      openTelegramLink(invoiceLink);
+      resolve("pending");
+      return;
+    }
+    w.openInvoice(invoiceLink, (status) => resolve(status));
+  });
 }

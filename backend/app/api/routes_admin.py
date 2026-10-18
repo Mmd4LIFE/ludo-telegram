@@ -21,6 +21,7 @@ from app.database import Base, get_session
 from app.models import Match, MatchSeat, MatchStatus, User, MessageReaction, ReactionEmoji, PollTemplate, Poll, AppConfig
 from app.models import ChatMessage as ChatRow
 from app import appconfig
+from app.services import ledger
 from app.schemas import (
     AddPollTemplateRequest,
     AddReactionRequest,
@@ -29,6 +30,8 @@ from app.schemas import (
     AdminChatEntry,
     AdminChatSeat,
     AdminChatView,
+    AdminCreditOut,
+    AdminCreditRequest,
     AdminKnockRow,
     AppConfigOut,
     AdminStats,
@@ -109,6 +112,34 @@ async def list_users(
     stmt = stmt.order_by(User.last_seen_at.desc().nullslast(), User.id.desc())
     rows = (await session.execute(stmt.limit(limit).offset(offset))).scalars().all()
     return [AdminUser.from_user(u) for u in rows]
+
+
+@router.post("/users/{user_id}/credit", response_model=AdminCreditOut)
+async def credit_user(
+    user_id: int,
+    body: AdminCreditRequest,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Manually add coins to a player's wallet (ledger reason: admin_credit)."""
+    amount = int(body.amount)
+    if amount < 1:
+        raise HTTPException(400, "Amount must be at least 1")
+    target = await session.get(User, user_id)
+    if target is None or target.is_bot:
+        raise HTTPException(404, "User not found")
+    note = (body.note or "").strip()[:120] or None
+    coins = await ledger.credit(
+        session,
+        target.id,
+        amount,
+        reason="admin_credit",
+        ref_type="admin",
+        ref_id=admin.id,
+        meta={"admin_id": admin.id, "note": note},
+    )
+    await session.commit()
+    return AdminCreditOut(user_id=target.id, coins=coins, amount=amount)
 
 
 @router.get("/data/tables")

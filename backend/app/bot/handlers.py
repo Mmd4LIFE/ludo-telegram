@@ -1,41 +1,42 @@
-"""Telegram command handlers.
+"""Telegram command handlers + Stars payment callbacks.
 
-Minimal for the base: /start (opens the Mini App + grants the one-off reachable bonus and
-handles referral deep links), /play, /help. The game lives entirely in the Mini App; the
-bot is the launcher and the notification channel.
+Minimal commands: /start (Mini App + referral / room / gift deep links), /play, /help.
+Stars: answer pre_checkout_query and fulfill successful_payment idempotently.
 """
 from __future__ import annotations
 
 import logging
 
-from aiogram import Router
-from aiogram.filters import CommandObject, CommandStart
+from aiogram import F, Router
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    PreCheckoutQuery,
     WebAppInfo,
 )
-from aiogram.filters import Command
 
 from app.config import settings
 from app.database import SessionLocal
 from app.services import ledger
+from app.services import stars as stars_svc
 from app.services.users import get_or_create_from_telegram
 
 logger = logging.getLogger("ludo.bot")
 router = Router()
 
 
-def _play_kb(start_param: str | None = None) -> InlineKeyboardMarkup:
+def _play_kb(start_param: str | None = None, *, button: str | None = None) -> InlineKeyboardMarkup:
     # A WebApp button opens the Mini App at this exact URL; the app reads ?startapp=
     # (see lib/telegram.ts startParam) so a room-invite deep link joins that room.
     url = settings.WEBAPP_URL
-    text = "🎲 Play Ludo"
+    text = button or "🎲 Play Ludo"
     if start_param:
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}startapp={start_param}"
-        text = "🎲 Join the room"
+        if button is None:
+            text = "🎲 Open Ludo"
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=text, web_app=WebAppInfo(url=url))
     ]])
@@ -46,12 +47,12 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     tg = message.from_user
     if tg is None:
         return
-    payload = command.args  # after /start, e.g. "ref-42" or "rm-ABCDE"
-    # Only ref-* is a referral; rm-* is a room invite handed straight to the Mini App.
+    payload = command.args  # after /start, e.g. "ref-42", "rm-ABCDE", "gift-TOKEN"
     referral = payload if payload and payload.startswith("ref-") else None
     room = payload if payload and payload.startswith("rm-") else None
+    gift = payload if payload and payload.startswith("gift-") else None
     async with SessionLocal() as session:
-        user, created = await get_or_create_from_telegram(
+        user, _created = await get_or_create_from_telegram(
             session, {
                 "id": tg.id,
                 "first_name": tg.first_name,
@@ -70,7 +71,14 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
     if room:
         await message.answer(
             "🎲 <b>You're invited to a Ludo room!</b>\n\nTap below to join and play.",
-            reply_markup=_play_kb(room),
+            reply_markup=_play_kb(room, button="🎲 Join the room"),
+        )
+        return
+
+    if gift:
+        await message.answer(
+            "🎁 <b>Someone sent you coins!</b>\n\nTap below to open the app and claim your gift.",
+            reply_markup=_play_kb(gift, button="🎁 Claim gift"),
         )
         return
 
@@ -98,3 +106,42 @@ async def cmd_help(message: Message) -> None:
         "• First to get all four tokens home wins.\n",
         reply_markup=_play_kb(),
     )
+
+
+@router.pre_checkout_query()
+async def on_pre_checkout(query: PreCheckoutQuery) -> None:
+    async with SessionLocal() as session:
+        ok, err = await stars_svc.validate_pre_checkout(
+            session,
+            invoice_payload=query.invoice_payload,
+            total_amount=query.total_amount,
+            currency=query.currency,
+        )
+    await query.answer(ok=ok, error_message=err)
+
+
+@router.message(F.successful_payment)
+async def on_successful_payment(message: Message) -> None:
+    payment = message.successful_payment
+    if payment is None:
+        return
+    async with SessionLocal() as session:
+        row = await stars_svc.fulfill_successful_payment(
+            session,
+            invoice_payload=payment.invoice_payload,
+            telegram_payment_charge_id=payment.telegram_payment_charge_id,
+            total_amount=payment.total_amount,
+            currency=payment.currency,
+        )
+        await session.commit()
+    if row is not None and row.status == "paid":
+        await message.answer(
+            f"✅ Payment received — <b>{int(row.coins):,}</b> coins added to your wallet.",
+            reply_markup=_play_kb(),
+        )
+    else:
+        logger.error("Stars fulfillment failed for charge=%s", payment.telegram_payment_charge_id)
+        await message.answer(
+            "Payment received but we could not credit coins automatically. Contact support.",
+            reply_markup=_play_kb(),
+        )
