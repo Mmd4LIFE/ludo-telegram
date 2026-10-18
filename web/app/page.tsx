@@ -2916,40 +2916,49 @@ function AdminPanel({ onBack }: { onBack: () => void }) {
                 <input
                   value={creditAmt[u.id] ?? ""}
                   onChange={(e) =>
-                    setCreditAmt((m) => ({ ...m, [u.id]: e.target.value }))
+                    setCreditAmt((m) => ({ ...m, [u.id]: e.target.value.replace(/[^\d]/g, "") }))
                   }
-                  placeholder="+add / −remove"
+                  placeholder="Amount"
                   inputMode="numeric"
                   className="h-8 flex-1 rounded-lg bg-secondary px-2 text-xs outline-none ring-1 ring-white/10"
                 />
-                <button
-                  type="button"
-                  disabled={creditBusy === u.id}
-                  className="h-8 shrink-0 rounded-lg bg-primary/20 px-2.5 text-[11px] font-bold text-primary ring-1 ring-primary/30 disabled:opacity-50"
-                  onClick={async () => {
-                    const amt = Number(creditAmt[u.id]);
-                    if (!Number.isFinite(amt) || amt === 0) {
-                      setErr("Enter a non-zero amount (negative to remove)");
-                      return;
-                    }
-                    setCreditBusy(u.id);
-                    setErr(null);
-                    try {
-                      const r = await api.adminCreditUser(u.id, amt);
-                      setUsers((list) =>
-                        list.map((x) => (x.id === u.id ? { ...x, coins: r.coins } : x)),
-                      );
-                      setCreditAmt((m) => ({ ...m, [u.id]: "" }));
-                      api.adminStats().then(setStats).catch(() => {});
-                    } catch (e) {
-                      setErr(String(e));
-                    } finally {
-                      setCreditBusy(null);
-                    }
-                  }}
-                >
-                  {creditBusy === u.id ? "…" : "Apply"}
-                </button>
+                {(["add", "remove"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={creditBusy === u.id}
+                    className={cn(
+                      "h-8 shrink-0 rounded-lg px-2.5 text-[11px] font-bold ring-1 disabled:opacity-50",
+                      mode === "add"
+                        ? "bg-primary/20 text-primary ring-primary/30"
+                        : "bg-red-500/15 text-red-300 ring-red-400/30",
+                    )}
+                    onClick={async () => {
+                      const raw = Number(creditAmt[u.id]);
+                      if (!Number.isFinite(raw) || raw < 1) {
+                        setErr("Enter a positive amount");
+                        return;
+                      }
+                      const amt = mode === "add" ? raw : -raw;
+                      setCreditBusy(u.id);
+                      setErr(null);
+                      try {
+                        const r = await api.adminCreditUser(u.id, amt);
+                        setUsers((list) =>
+                          list.map((x) => (x.id === u.id ? { ...x, coins: r.coins } : x)),
+                        );
+                        setCreditAmt((m) => ({ ...m, [u.id]: "" }));
+                        api.adminStats().then(setStats).catch(() => {});
+                      } catch (e) {
+                        setErr(String(e));
+                      } finally {
+                        setCreditBusy(null);
+                      }
+                    }}
+                  >
+                    {creditBusy === u.id ? "…" : mode === "add" ? "+ Add" : "− Remove"}
+                  </button>
+                ))}
               </div>
             </div>
           ))}
