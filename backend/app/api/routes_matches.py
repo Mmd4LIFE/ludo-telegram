@@ -48,7 +48,8 @@ from app.schemas import (
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
-_COLORS = [Color.RED, Color.GREEN, Color.YELLOW, Color.BLUE]
+# Seat fill order matches board turn order (blue first, then clockwise).
+_COLORS = [Color.BLUE, Color.RED, Color.GREEN, Color.YELLOW]
 
 
 async def _allowed_reactions(session: AsyncSession) -> list[str]:
@@ -177,9 +178,9 @@ async def create_match(
         except InsufficientFunds as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not enough coins for the entry fee") from e
 
-    # seat the creator on RED (seat 0)
+    # seat the creator on BLUE (seat 0) — opening colour in clockwise turn order
     session.add(MatchSeat(
-        match_id=match.id, seat_index=0, color=Color.RED.name,
+        match_id=match.id, seat_index=0, color=Color.BLUE.name,
         user_id=user.id, is_bot=False, connected=False,
     ))
 

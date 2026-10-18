@@ -51,6 +51,31 @@ def test_geometry() -> None:
     _check("neutral stars are NOT safe by default", not any(is_safe(o) for o in (8, 21, 34, 47)))
 
 
+# --- turn order (clockwise from blue) ---------------------------------------
+def test_turns_clockwise_from_blue() -> None:
+    s = initial_state(4)
+    _check("4p default opens on blue (seat 0)", s.current == 0 and s.players[0].color is Color.BLUE)
+    register_roll(s, 3)
+    apply_move(s, None)
+    _check("after blue comes red", s.current == 1 and s.players[1].color is Color.RED)
+    register_roll(s, 3)
+    apply_move(s, None)
+    _check("after red comes green", s.current == 2 and s.players[2].color is Color.GREEN)
+    register_roll(s, 3)
+    apply_move(s, None)
+    _check("after green comes yellow", s.current == 3 and s.players[3].color is Color.YELLOW)
+    register_roll(s, 3)
+    apply_move(s, None)
+    _check("after yellow wraps to blue", s.current == 0 and s.players[0].color is Color.BLUE)
+
+    # Join / seat-index order must not dictate turns — colour does.
+    s2 = initial_state(2, seat_colors=[Color.RED, Color.BLUE])
+    _check("blue opens even when seated second", s2.current == 1 and s2.players[1].color is Color.BLUE)
+    register_roll(s2, 3)
+    apply_move(s2, None)
+    _check("after blue comes red (seat 0)", s2.current == 0 and s2.players[0].color is Color.RED)
+
+
 # --- release only on a 6 ----------------------------------------------------
 def test_release_requires_six() -> None:
     s = initial_state(4)
@@ -275,6 +300,7 @@ def test_fuzz_games() -> None:
 def run_all() -> None:
     for fn in (
         test_geometry,
+        test_turns_clockwise_from_blue,
         test_release_requires_six,
         test_extra_turn_on_six,
         test_sixes_loop_without_cap,

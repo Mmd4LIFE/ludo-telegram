@@ -185,7 +185,7 @@ class MatchManager:
         )
         session.add(match)
         await session.flush()
-        colors = [Color.RED, Color.GREEN, Color.YELLOW, Color.BLUE]
+        colors = [Color.BLUE, Color.RED, Color.GREEN, Color.YELLOW]
         for i, c in enumerate(colors):
             session.add(MatchSeat(
                 match_id=match.id, seat_index=i, color=c.name, is_bot=True, connected=True,

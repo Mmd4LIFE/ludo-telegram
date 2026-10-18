@@ -46,12 +46,21 @@ TOKENS_PER_PLAYER = 4
 
 
 class Color(IntEnum):
-    """Player colours in clockwise seating order. Value doubles as the seat index."""
+    """Board colours. Enum values are stable for serialization (active_stars, etc.).
+
+    Turn order is always clockwise starting at blue — see ``TURN_ORDER`` — and is
+    independent of join/seat-index order.
+    """
 
     RED = 0
     GREEN = 1
     YELLOW = 2
     BLUE = 3
+
+
+# Clockwise turn order on the board, always starting with blue.
+# blue (abs 39) → red (0) → green (13) → yellow (26) → blue …
+TURN_ORDER: tuple[Color, ...] = (Color.BLUE, Color.RED, Color.GREEN, Color.YELLOW)
 
 
 # Absolute ring cell where each colour enters play (13 cells apart, clockwise).

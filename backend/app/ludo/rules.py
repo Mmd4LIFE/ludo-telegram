@@ -28,6 +28,7 @@ from app.ludo.board import (
     BASE,
     HOME,
     TOKENS_PER_PLAYER,
+    TURN_ORDER,
     Color,
     absolute_square,
     neutral_star_owner,
@@ -36,22 +37,55 @@ from app.ludo.board import (
 from app.ludo.state import GameState, Move, Phase, PlayerState
 
 
+def _seat_for_color(state: GameState, color: Color) -> int | None:
+    for i, p in enumerate(state.players):
+        if p.color is color:
+            return i
+    return None
+
+
+def first_turn_seat(state: GameState) -> int:
+    """Seat that opens the game: earliest colour in ``TURN_ORDER`` that is seated."""
+    for color in TURN_ORDER:
+        seat = _seat_for_color(state, color)
+        if seat is not None:
+            return seat
+    return 0
+
+
+def next_turn_seat(state: GameState, from_seat: int) -> int:
+    """Next seated colour clockwise from ``from_seat``'s colour (blue→red→green→yellow)."""
+    start = TURN_ORDER.index(state.players[from_seat].color)
+    for offset in range(1, len(TURN_ORDER) + 1):
+        color = TURN_ORDER[(start + offset) % len(TURN_ORDER)]
+        seat = _seat_for_color(state, color)
+        if seat is not None:
+            return seat
+    return from_seat
+
+
 # --- setup ------------------------------------------------------------------
 def initial_state(num_players: int = 4, *, seat_colors: list[Color] | None = None) -> GameState:
-    """A fresh game. 2–4 players seated on the standard colours (opposite corners for 2)."""
+    """A fresh game. 2–4 players seated on the standard colours (opposite corners for 2).
+
+    The opening turn is always the seated colour earliest in ``TURN_ORDER`` (blue first),
+    not seat-index / join order.
+    """
     if not 2 <= num_players <= 4:
         raise ValueError("Ludo supports 2 to 4 players")
     if seat_colors is None:
-        # 2p sit opposite (RED/YELLOW); 3p RED/GREEN/YELLOW; 4p all.
+        # 2p sit opposite (RED/YELLOW); 3p skip blue; 4p all in turn order.
         defaults = {
             2: [Color.RED, Color.YELLOW],
             3: [Color.RED, Color.GREEN, Color.YELLOW],
-            4: [Color.RED, Color.GREEN, Color.YELLOW, Color.BLUE],
+            4: [Color.BLUE, Color.RED, Color.GREEN, Color.YELLOW],
         }
         seat_colors = defaults[num_players]
     if len(seat_colors) != num_players or len(set(seat_colors)) != num_players:
         raise ValueError("seat_colors must be a distinct colour per player")
-    return GameState(players=[PlayerState(color=c) for c in seat_colors])
+    state = GameState(players=[PlayerState(color=c) for c in seat_colors])
+    state.current = first_turn_seat(state)
+    return state
 
 
 # --- dice -------------------------------------------------------------------
@@ -309,13 +343,13 @@ def _advance_to_next_player(state: GameState) -> None:
     state.turn += 1
     n = len(state.players)
     seat = state.current
-    # Walk forward to the next active seat, SKIPPING frozen ones (Freeze/Deep Freeze) and
-    # consuming one frozen turn each time we pass them. Bounded — freezes only ever count
-    # down, so this terminates.
+    # Walk clockwise by colour (blue→red→green→yellow), SKIPPING finished and frozen
+    # seats and consuming one frozen turn each time we pass them. Bounded — freezes
+    # only ever count down, so this terminates.
     guard = 0
     while guard < n * 8:
         guard += 1
-        seat = (seat + 1) % n
+        seat = next_turn_seat(state, seat)
         if state.players[seat].all_home():
             continue
         if state.eff("skip", seat) > 0:
@@ -324,10 +358,10 @@ def _advance_to_next_player(state: GameState) -> None:
         state.current = seat
         _tick_turn_start(state, seat)
         return
-    # fail-safe: hand the turn to the next active seat regardless of freezes
+    # fail-safe: hand the turn to the next active colour regardless of freezes
     seat = state.current
     for _ in range(n):
-        seat = (seat + 1) % n
+        seat = next_turn_seat(state, seat)
         if not state.players[seat].all_home():
             state.current = seat
             _tick_turn_start(state, seat)

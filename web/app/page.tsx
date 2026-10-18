@@ -690,7 +690,7 @@ function WaitingRoom({
   const pending = summary?.pending ?? [];
   const iAmSeated = seats.some((s) => s.user_id === profile.id);
   const taken = new Set(seats.map((s) => s.color));
-  const freeColors = ["RED", "GREEN", "YELLOW", "BLUE"].filter((c) => !taken.has(c));
+  const freeColors = ["BLUE", "RED", "GREEN", "YELLOW"].filter((c) => !taken.has(c));
   const canStart = seats.length >= 2;
 
   const guard = async (fn: () => Promise<unknown>) => {
@@ -801,7 +801,7 @@ function WaitingRoom({
               </div>
               {isHost && editingColor === s.user_id && s.user_id !== null && (
                 <div className="flex items-center gap-2 pl-7">
-                  {["RED", "GREEN", "YELLOW", "BLUE"].map((c) => (
+                  {["BLUE", "RED", "GREEN", "YELLOW"].map((c) => (
                     <button
                       key={c}
                       disabled={busy}
