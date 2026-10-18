@@ -3932,7 +3932,6 @@ const REASON_LABEL: Record<string, string> = {
   stars_purchase: "Stars purchase",
   opening_balance: "Opening balance",
   signup: "Signup bonus",
-  bot_start: "Welcome bonus",
 };
 
 function reasonLabel(reason: string): string {
