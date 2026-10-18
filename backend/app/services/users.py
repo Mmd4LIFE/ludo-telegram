@@ -22,6 +22,9 @@ async def get_or_create_from_telegram(
         existing.first_name = tg_user.get("first_name") or existing.first_name
         existing.username = tg_user.get("username") or existing.username
         existing.language_code = tg_user.get("language_code") or existing.language_code
+        if not existing.wallet_code:
+            from app.models.user import _new_wallet_code
+            existing.wallet_code = _new_wallet_code()
         return existing, False
 
     user = User(

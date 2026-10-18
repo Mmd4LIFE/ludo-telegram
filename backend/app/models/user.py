@@ -6,6 +6,7 @@ from the poker app). ``username`` is only ever shown to a player's friends.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, func
@@ -14,6 +15,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 from app.models.mixins import TimestampMixin
+
+
+def _new_wallet_code() -> str:
+    return str(uuid.uuid4())
 
 
 class User(Base, TimestampMixin):
@@ -25,6 +30,11 @@ class User(Base, TimestampMixin):
     username: Mapped[str | None] = mapped_column(String(64), default=None)
     first_name: Mapped[str] = mapped_column(String(128), default="")
     language_code: Mapped[str | None] = mapped_column(String(8), default=None)
+
+    # Public opaque wallet id for transfers (UUID). Not the sequential primary key.
+    wallet_code: Mapped[str] = mapped_column(
+        String(36), unique=True, index=True, default=_new_wallet_code
+    )
 
     # soft currency
     coins: Mapped[int] = mapped_column(BigInteger, default=0)

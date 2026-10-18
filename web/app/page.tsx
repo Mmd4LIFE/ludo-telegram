@@ -83,7 +83,6 @@ import {
   initTelegram,
   notify,
   openInvoice,
-  shareGift,
   shareRoom,
   startParam,
 } from "@/lib/telegram";
@@ -3930,7 +3929,6 @@ function reasonLabel(reason: string): string {
 
 function WalletScreen({
   profile,
-  onProfile,
   onNotice,
 }: {
   profile: Profile;
@@ -3939,15 +3937,8 @@ function WalletScreen({
 }) {
   const [history, setHistory] = useState<BalanceHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [toId, setToId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
-  const [lookup, setLookup] = useState<{ id: number; first_name: string } | null>(null);
-  const [giftAmount, setGiftAmount] = useState("");
-  const [giftNote, setGiftNote] = useState("");
-  const [lastGiftUrl, setLastGiftUrl] = useState<string | null>(null);
-  const [lastGiftToken, setLastGiftToken] = useState<string | null>(null);
+  const [selected, setSelected] = useState<BalanceHistoryRow | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -3962,184 +3953,49 @@ function WalletScreen({
     refresh();
   }, [refresh, profile.coins]);
 
-  const doLookup = async () => {
-    const id = Number(toId);
-    if (!Number.isFinite(id) || id < 1) {
-      onNotice("Enter a valid wallet id");
-      return;
-    }
-    setBusy(true);
+  const copyCode = async () => {
+    const code = profile.wallet_code;
+    if (!code) return;
     try {
-      setLookup(await api.walletLookup(id));
-    } catch (e) {
-      setLookup(null);
-      onNotice(String(e).replace(/^\d+:\s*/, "") || "Wallet not found");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const doTransfer = async () => {
-    if (!lookup) return;
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt < 1) {
-      onNotice("Enter an amount");
-      return;
-    }
-    setBusy(true);
-    try {
-      const r = await api.walletTransfer(lookup.id, amt, note || undefined);
-      onProfile({ ...profile, coins: r.coins });
-      onNotice(`Sent ${amt.toLocaleString()} coins to ${lookup.first_name}`);
-      notify("success");
-      setAmount("");
-      setNote("");
-      setLookup(null);
-      setToId("");
-      refresh();
-    } catch (e) {
-      onNotice(String(e).replace(/^\d+:\s*/, "") || "Transfer failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const doGift = async () => {
-    const amt = Number(giftAmount);
-    if (!Number.isFinite(amt) || amt < 1) {
-      onNotice("Enter an amount");
-      return;
-    }
-    setBusy(true);
-    try {
-      const r = await api.walletCreateGift(amt, giftNote || undefined);
-      onProfile({ ...profile, coins: r.coins });
-      setLastGiftUrl(r.share_url);
-      setLastGiftToken(r.claim_token);
-      onNotice("Gift created — share the link");
-      notify("success");
-      setGiftAmount("");
-      setGiftNote("");
-      refresh();
-      if (r.claim_token) {
-        shareGift(
-          profile.bot_username,
-          r.claim_token,
-          `I sent you ${amt.toLocaleString()} Ludo coins! Tap to claim.`,
-        );
-      }
-    } catch (e) {
-      onNotice(String(e).replace(/^\d+:\s*/, "") || "Gift failed");
-    } finally {
-      setBusy(false);
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      haptic("light");
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      onNotice(code);
     }
   };
 
   return (
     <Shell className="pb-28">
       <Card>
-        <SectionLabel>Your wallet</SectionLabel>
-        <div className="mt-2 flex items-end justify-between gap-3">
-          <div>
-            <div className="text-2xl font-extrabold tabular-nums">
-              {profile.coins.toLocaleString()}
-            </div>
-            <div className="text-[11px] text-muted-foreground">coins</div>
-          </div>
-          <div className="rounded-xl bg-secondary/60 px-3 py-2 text-right ring-1 ring-white/10">
+        <SectionLabel>Balance</SectionLabel>
+        <div className="mt-2 text-2xl font-extrabold tabular-nums">
+          {profile.coins.toLocaleString()}
+          <span className="ml-1.5 text-sm font-bold text-muted-foreground">coins</span>
+        </div>
+        <button
+          type="button"
+          onClick={copyCode}
+          className="mt-3 flex w-full items-center justify-between gap-2 rounded-xl bg-secondary/60 px-3 py-2 text-left ring-1 ring-white/10 transition active:scale-[0.99]"
+        >
+          <div className="min-w-0">
             <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
               Wallet id
             </div>
-            <div className="text-sm font-extrabold tabular-nums">{profile.id}</div>
+            <div className="truncate font-mono text-[11px] font-semibold">
+              {profile.wallet_code || "—"}
+            </div>
           </div>
-        </div>
-      </Card>
-
-      <Card>
-        <SectionLabel>Send coins</SectionLabel>
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Transfer to another player&apos;s wallet id (shown on their Me / Wallet tab).
-        </p>
-        <div className="mt-2 flex gap-2">
-          <input
-            value={toId}
-            onChange={(e) => {
-              setToId(e.target.value);
-              setLookup(null);
-            }}
-            placeholder="Wallet id"
-            inputMode="numeric"
-            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
-          />
-          <Button variant="secondary" disabled={busy} onClick={doLookup}>
-            Look up
-          </Button>
-        </div>
-        {lookup && (
-          <div className="mt-2 rounded-xl bg-secondary/50 px-3 py-2 text-sm ring-1 ring-white/10">
-            Send to <span className="font-bold">{lookup.first_name}</span>{" "}
-            <span className="text-muted-foreground">#{lookup.id}</span>
-          </div>
-        )}
-        <div className="mt-2 flex gap-2">
-          <input
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="Amount"
-            inputMode="numeric"
-            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
-          />
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Note (optional)"
-            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
-          />
-        </div>
-        <Button className="mt-2 w-full" disabled={busy || !lookup} onClick={doTransfer}>
-          <Send className="size-4" /> Send
-        </Button>
-      </Card>
-
-      <Card>
-        <SectionLabel>Gift link</SectionLabel>
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Coins are held until someone claims via Telegram. Unclaimed gifts expire in 7 days.
-        </p>
-        <div className="mt-2 flex gap-2">
-          <input
-            value={giftAmount}
-            onChange={(e) => setGiftAmount(e.target.value)}
-            placeholder="Amount"
-            inputMode="numeric"
-            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
-          />
-          <input
-            value={giftNote}
-            onChange={(e) => setGiftNote(e.target.value)}
-            placeholder="Note (optional)"
-            className="h-10 flex-1 rounded-xl bg-secondary px-3 text-sm outline-none ring-1 ring-white/10"
-          />
-        </div>
-        <Button className="mt-2 w-full" variant="secondary" disabled={busy} onClick={doGift}>
-          <Share2 className="size-4" /> Create &amp; share gift
-        </Button>
-        {lastGiftUrl && lastGiftToken && (
-          <button
-            type="button"
-            className="mt-2 w-full truncate rounded-xl bg-secondary/50 px-3 py-2 text-left text-[11px] text-muted-foreground ring-1 ring-white/10"
-            onClick={() => {
-              shareGift(profile.bot_username, lastGiftToken, "Claim your Ludo coins!");
-            }}
-          >
-            Share again · {lastGiftUrl}
-          </button>
-        )}
+          <span className="shrink-0 text-[10px] font-bold text-primary">
+            {copied ? "Copied" : "Copy"}
+          </span>
+        </button>
       </Card>
 
       <Card>
         <SectionLabel>Balance history</SectionLabel>
-        <div className="no-scrollbar mt-2 flex max-h-[40vh] flex-col gap-1.5 overflow-y-auto">
+        <div className="no-scrollbar mt-2 flex max-h-[62vh] flex-col gap-1.5 overflow-y-auto">
           {loading && (
             <div className="py-4 text-center text-xs text-muted-foreground">Loading…</div>
           )}
@@ -4147,9 +4003,14 @@ function WalletScreen({
             <div className="py-4 text-center text-xs text-muted-foreground">No movements yet.</div>
           )}
           {history.map((h) => (
-            <div
+            <button
               key={h.id}
-              className="flex items-center justify-between gap-2 rounded-xl bg-secondary/50 px-2.5 py-2"
+              type="button"
+              onClick={() => {
+                haptic("light");
+                setSelected(h);
+              }}
+              className="flex w-full items-center justify-between gap-2 rounded-xl bg-secondary/50 px-2.5 py-2.5 text-left transition active:scale-[0.99]"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold">{reasonLabel(h.reason)}</div>
@@ -4171,10 +4032,97 @@ function WalletScreen({
                   bal {h.balance_after.toLocaleString()}
                 </div>
               </div>
-            </div>
+            </button>
           ))}
         </div>
       </Card>
+
+      {selected && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center"
+          onClick={() => setSelected(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-card p-4 ring-1 ring-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="text-base font-extrabold">{reasonLabel(selected.reason)}</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  {selected.created_at
+                    ? new Date(selected.created_at).toLocaleString()
+                    : "—"}
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setSelected(null)}
+                className="grid size-8 place-items-center rounded-full bg-secondary"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="rounded-xl bg-secondary/60 px-3 py-2">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Change
+                </div>
+                <div
+                  className={cn(
+                    "text-lg font-extrabold tabular-nums",
+                    selected.delta >= 0 ? "text-emerald-400" : "text-red-400",
+                  )}
+                >
+                  {selected.delta >= 0 ? "+" : ""}
+                  {selected.delta.toLocaleString()}
+                </div>
+              </div>
+              <div className="rounded-xl bg-secondary/60 px-3 py-2">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Balance after
+                </div>
+                <div className="text-lg font-extrabold tabular-nums">
+                  {selected.balance_after.toLocaleString()}
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 space-y-1.5 text-[12px]">
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Reason code</span>
+                <span className="font-mono font-semibold">{selected.reason}</span>
+              </div>
+              {selected.ref_type && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-muted-foreground">Reference</span>
+                  <span className="font-semibold">
+                    {selected.ref_type}
+                    {selected.ref_id != null ? ` #${selected.ref_id}` : ""}
+                  </span>
+                </div>
+              )}
+              {selected.meta && Object.keys(selected.meta).length > 0 && (
+                <div className="mt-2 rounded-xl bg-secondary/40 px-3 py-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Details
+                  </div>
+                  <div className="mt-1 space-y-1">
+                    {Object.entries(selected.meta).map(([k, v]) => (
+                      <div key={k} className="flex justify-between gap-2">
+                        <span className="text-muted-foreground">{k}</span>
+                        <span className="max-w-[60%] truncate text-right font-semibold">
+                          {typeof v === "object" ? JSON.stringify(v) : String(v ?? "")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }
@@ -4328,9 +4276,22 @@ function MeScreen({
         {profile.username && (
           <div className="text-xs text-muted-foreground">@{profile.username}</div>
         )}
-        <div className="mt-1 text-[11px] text-muted-foreground">
-          Wallet id <span className="font-bold tabular-nums text-foreground">#{profile.id}</span>
-        </div>
+        {profile.wallet_code && (
+          <button
+            type="button"
+            className="mt-1 max-w-full truncate px-2 font-mono text-[10px] text-muted-foreground"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(profile.wallet_code);
+                haptic("light");
+              } catch {
+                /* ignore */
+              }
+            }}
+          >
+            Wallet {profile.wallet_code}
+          </button>
+        )}
         <div className="mt-3 flex items-center justify-center gap-2">
           <span className="rounded-full bg-secondary px-3 py-1 text-[11px] font-bold text-muted-foreground ring-1 ring-white/10">
             LVL {profile.level}

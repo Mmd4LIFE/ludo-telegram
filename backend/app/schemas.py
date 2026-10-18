@@ -28,6 +28,8 @@ class UserProfile(BaseModel):
     xp: int
     games_played: int
     games_won: int
+    # Opaque public wallet UUID for transfers (not the sequential user id).
+    wallet_code: str = ""
     # bot @username, so the Mini App can build t.me/<bot>?start=rm-<code> invite links.
     bot_username: str = ""
     is_admin: bool = False
@@ -38,6 +40,11 @@ class UserProfile(BaseModel):
     def from_user(cls, u) -> "UserProfile":
         from app.bot.instance import get_bot_username
         from app.config import settings
+        from app.models.user import _new_wallet_code
+
+        # Lazy-fill if an older row somehow missed the migration default.
+        if not getattr(u, "wallet_code", None):
+            u.wallet_code = _new_wallet_code()
 
         skins = list(getattr(u, "unlocked_skins", None) or ["classic"])
         if "classic" not in skins:
@@ -51,6 +58,7 @@ class UserProfile(BaseModel):
             xp=u.xp,
             games_played=u.games_played,
             games_won=u.games_won,
+            wallet_code=u.wallet_code or "",
             bot_username=get_bot_username(),
             is_admin=u.telegram_id in settings.admin_ids,
             dice_skin=getattr(u, "dice_skin", "classic") or "classic",
@@ -404,16 +412,17 @@ class BalanceHistoryRow(BaseModel):
     reason: str
     ref_type: str | None = None
     ref_id: int | None = None
+    meta: dict | None = None
     created_at: str | None = None
 
 
 class WalletLookup(BaseModel):
-    id: int
+    wallet_code: str
     first_name: str
 
 
 class TransferRequest(BaseModel):
-    to_user_id: int
+    to_wallet: str
     amount: int
     note: str | None = None
 
@@ -429,8 +438,6 @@ class GiftClaimRequest(BaseModel):
 
 class TransferOut(BaseModel):
     id: int
-    from_user_id: int
-    to_user_id: int | None = None
     amount: int
     status: str
     note: str | None = None
@@ -438,7 +445,7 @@ class TransferOut(BaseModel):
     share_url: str | None = None
     created_at: str | None = None
     claimed_at: str | None = None
-    coins: int  # sender/claimer balance after
+    coins: int  # caller balance after
 
 
 class AdminCreditRequest(BaseModel):

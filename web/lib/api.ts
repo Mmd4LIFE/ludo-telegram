@@ -52,6 +52,7 @@ export interface Profile {
   xp: number;
   games_played: number;
   games_won: number;
+  wallet_code: string;
   bot_username: string;
   is_admin: boolean;
   dice_skin: string;
@@ -315,13 +316,12 @@ export interface BalanceHistoryRow {
   reason: string;
   ref_type: string | null;
   ref_id: number | null;
+  meta: Record<string, unknown> | null;
   created_at: string | null;
 }
 
 export interface TransferResult {
   id: number;
-  from_user_id: number;
-  to_user_id: number | null;
   amount: number;
   status: string;
   note: string | null;
@@ -408,11 +408,14 @@ export const api = {
       "GET",
       `/api/wallet/history?limit=${limit}&offset=${offset}`,
     ),
-  walletLookup: (id: number) =>
-    req<{ id: number; first_name: string }>("GET", `/api/wallet/lookup?id=${id}`),
-  walletTransfer: (to_user_id: number, amount: number, note?: string) =>
+  walletLookup: (code: string) =>
+    req<{ wallet_code: string; first_name: string }>(
+      "GET",
+      `/api/wallet/lookup?code=${encodeURIComponent(code)}`,
+    ),
+  walletTransfer: (to_wallet: string, amount: number, note?: string) =>
     req<TransferResult>("POST", "/api/wallet/transfer", {
-      to_user_id,
+      to_wallet,
       amount,
       note: note ?? null,
     }),
