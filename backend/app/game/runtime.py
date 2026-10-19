@@ -58,7 +58,8 @@ from app.services.coin_features import (
     boost_params,
 )
 from app.services.ledger import InsufficientFunds, placement_payout
-from sqlalchemy import insert, update
+from sqlalchemy import insert, select, update
+from app.analytics import clickhouse as analytics
 
 logger = logging.getLogger("ludo.runtime")
 
@@ -307,6 +308,10 @@ class MatchRuntime:
                 self.cfg = await runtime_config()
             except Exception:  # noqa: BLE001 — fall back to defaults if the store is unreachable
                 logger.exception("could not load runtime config for %s; using defaults", self.code)
+            try:
+                await self._load_scores()
+            except Exception:  # noqa: BLE001 — a score reload must not stop the match
+                logger.exception("could not reload scores for %s", self.code)
             await self._broadcast()
             while self.state.phase is not Phase.FINISHED:
                 while await self._execute_control():
@@ -431,36 +436,17 @@ class MatchRuntime:
         ):
             return False
 
-        # Undo last face from histograms if we recorded it, then apply a fresh roll.
-        old_face = self.state.roll_face
-        if old_face is not None:
-            ghist = self.game_dice.get(seat) or {}
-            if ghist.get(old_face):
-                ghist[old_face] = max(0, ghist[old_face] - 1)
-            if uid in self.stat_dice and self.stat_dice[uid].get(old_face):
-                self.stat_dice[uid][old_face] = max(0, self.stat_dice[uid][old_face] - 1)
-            # drop the last buffered roll for this seat/turn if present
-            for i in range(len(self.buf_rolls) - 1, -1, -1):
-                r = self.buf_rolls[i]
-                if r.get("user_id") == uid and r.get("turn") == self.state.turn:
-                    self.buf_rolls.pop(i)
-                    break
-
-        register_roll(self.state, roll_die(self._rng))
-        if self.state.eff("double", seat) > 0 and self.state.roll_face is not None:
-            # Twin Dice already consumed on the original roll — do not re-consume.
-            pass
-        if self.state.roll_face is not None:
-            face = self.state.roll_face
-            self.seat_last_die[seat] = face
-            ghist = self.game_dice.setdefault(seat, {})
-            ghist[face] = ghist.get(face, 0) + 1
-            hist = self.stat_dice.setdefault(uid, {})
-            hist[face] = hist.get(face, 0) + 1
-            self.buf_rolls.append({
-                "match_id": self.match_id, "user_id": uid, "seat": seat,
-                "value": face, "turn": self.state.turn,
-            })
+        # A reroll changes the face used for the move. It does not erase the roll
+        # already saved: the scoreboard counts every face, same as dice_rolls.
+        # register_roll() only accepts the ROLL phase, and this seat is already in MOVE.
+        face = roll_die(self._rng)
+        self.state.roll_face = face
+        self.state.die = face
+        if face == 6:
+            self.state.consecutive_sixes += 1
+        else:
+            self.state.consecutive_sixes = 0
+        self._note_roll(seat, face, uid)
         self._rerolled_this_turn = True
         self._hint_token = None
         await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)
@@ -498,6 +484,62 @@ class MatchRuntime:
                 await session.commit()
         except Exception:  # noqa: BLE001
             logger.exception("coin credit failed match=%s user=%s", self.code, uid)
+
+    def _note_roll(self, seat: int, face: int, uid: int | None) -> None:
+        """Count a face in the live score and, for a human, queue it for the roll log."""
+        self.seat_last_die[seat] = face
+        hist = self.game_dice.setdefault(seat, {})
+        hist[face] = hist.get(face, 0) + 1
+        if uid is None:
+            return
+        lifetime = self.stat_dice.setdefault(uid, {})
+        lifetime[face] = lifetime.get(face, 0) + 1
+        self.buf_rolls.append({
+            "match_id": self.match_id, "user_id": uid, "seat": seat,
+            "value": face, "turn": self.state.turn,
+        })
+
+    async def _load_scores(self) -> None:
+        """Rebuild the scoreboard from saved rolls so a restart cannot drop a face."""
+        async with SessionLocal() as session:
+            rolls = (
+                await session.execute(
+                    select(DiceRoll.seat, DiceRoll.value).where(
+                        DiceRoll.match_id == self.match_id
+                    )
+                )
+            ).all()
+            knocks = (
+                await session.execute(
+                    select(
+                        Knockout.attacker_seat,
+                        Knockout.victim_seat,
+                        Knockout.taken,
+                    ).where(Knockout.match_id == self.match_id)
+                )
+            ).all()
+        self.game_dice = analytics.fold_face_counts([(s, v) for s, v in rolls])
+        for row in self.buf_rolls:
+            hist = self.game_dice.setdefault(row["seat"], {})
+            hist[row["value"]] = hist.get(row["value"], 0) + 1
+        self.game_dealt = {}
+        self.game_taken = {}
+        self.game_potential = {}
+        for attacker, victim, taken in knocks:
+            if taken:
+                self.game_dealt[attacker] = self.game_dealt.get(attacker, 0) + 1
+                self.game_taken[victim] = self.game_taken.get(victim, 0) + 1
+            else:
+                self.game_potential[attacker] = self.game_potential.get(attacker, 0) + 1
+        for row in self.buf_knocks:
+            if row.get("taken"):
+                seat = row["attacker_seat"]
+                self.game_dealt[seat] = self.game_dealt.get(seat, 0) + 1
+                victim = row["victim_seat"]
+                self.game_taken[victim] = self.game_taken.get(victim, 0) + 1
+            else:
+                seat = row["attacker_seat"]
+                self.game_potential[seat] = self.game_potential.get(seat, 0) + 1
 
     def _should_persist(self) -> bool:
         """Persist on a cadence, when event buffers grow, or when the game ends."""
@@ -574,18 +616,7 @@ class MatchRuntime:
                 if self.state.eff("double", seat) <= 0:
                     self.state.set_eff("double_mult", seat, 0)
             if self.state.roll_face is not None:
-                face = self.state.roll_face
-                self.seat_last_die[seat] = face          # show the true face, not the doubled value
-                ghist = self.game_dice.setdefault(seat, {})
-                ghist[face] = ghist.get(face, 0) + 1
-                uid = self._human_uid(seat)
-                if uid is not None:
-                    hist = self.stat_dice.setdefault(uid, {})
-                    hist[face] = hist.get(face, 0) + 1
-                    self.buf_rolls.append({
-                        "match_id": self.match_id, "user_id": uid, "seat": seat,
-                        "value": face, "turn": self.state.turn,
-                    })
+                self._note_roll(seat, self.state.roll_face, self._human_uid(seat))
             self._rerolled_this_turn = False
             await self._broadcast()
             await asyncio.sleep(settings.ROLL_REVEAL_SECONDS)  # hold on the die face
@@ -1068,24 +1099,56 @@ class MatchRuntime:
             m.state = self.state.to_dict()
             if self.state.phase is not Phase.FINISHED:
                 m.status = MatchStatus.PLAYING
-            # Bulk-insert the roll/knock events buffered since the last persist (humans only).
+            # Insert event rows so they get ids, then copy those rows to ClickHouse.
+            roll_copy: list[dict] = []
+            knock_copy: list[dict] = []
             if self.buf_rolls:
-                await session.execute(insert(DiceRoll), self.buf_rolls)
-                self.buf_rolls = []
+                roll_objs = [DiceRoll(**row) for row in self.buf_rolls]
+                session.add_all(roll_objs)
+            else:
+                roll_objs = []
             if self.buf_knocks:
-                await session.execute(insert(Knockout), self.buf_knocks)
-                self.buf_knocks = []
+                knock_objs = [Knockout(**row) for row in self.buf_knocks]
+                session.add_all(knock_objs)
+            else:
+                knock_objs = []
             if self.buf_cards:
                 await session.execute(insert(CardDraw), self.buf_cards)
                 self.buf_cards = []
+            if roll_objs or knock_objs:
+                await session.flush()
+            roll_copy = [
+                {
+                    "id": o.id, "match_id": o.match_id, "user_id": o.user_id,
+                    "seat": o.seat, "value": o.value, "turn": o.turn,
+                }
+                for o in roll_objs
+            ]
+            knock_copy = [
+                {
+                    "id": o.id, "match_id": o.match_id, "turn": o.turn,
+                    "attacker_user_id": o.attacker_user_id,
+                    "attacker_seat": o.attacker_seat,
+                    "victim_user_id": o.victim_user_id or 0,
+                    "victim_seat": o.victim_seat,
+                    "taken": 1 if o.taken else 0,
+                }
+                for o in knock_objs
+            ]
             # Fold dice/capture deltas into lifetime totals in the same commit.
             await self._flush_stats(session)
             # Late joining closes for good once anyone has finished.
             if self.state.ranking:
                 await self._expire_pending(session)
             await session.commit()
+            self.buf_rolls = []
+            self.buf_knocks = []
         self._steps_since_persist = 0
         self._persist_dirty = False
+        if roll_copy:
+            asyncio.create_task(analytics.insert_rolls(roll_copy))
+        if knock_copy:
+            asyncio.create_task(analytics.insert_knocks(knock_copy))
 
     async def _expire_pending(self, session) -> None:
         now = datetime.now(timezone.utc)

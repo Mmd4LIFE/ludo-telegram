@@ -123,6 +123,7 @@ jobs:
             echo "synced files:"
             ls -la
             KEEP_DAYS=7 sh deploy/deploy-web.sh "$DEPLOY_PATH" "$WEB_TGZ"
+            docker compose up -d clickhouse
             docker compose up -d --build backend
             docker compose up -d nginx
             WEB_PORT="$(grep -E '^WEB_PORT=' .env 2>/dev/null | cut -d= -f2- || true)"

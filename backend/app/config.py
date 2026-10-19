@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 5
     DB_POOL_RECYCLE: int = 1800
     DB_POOL_TIMEOUT: int = 10
+    # Analytics copy of rolls and knocks. Empty host disables it; the game keeps
+    # using Postgres either way.
+    CLICKHOUSE_HOST: str = ""
+    CLICKHOUSE_PORT: int = 8123
+    CLICKHOUSE_USER: str = "ludo"
+    CLICKHOUSE_PASSWORD: str = ""
+    CLICKHOUSE_DB: str = "ludo"
 
     # Live-match scale caps
     MAX_VIEWERS_PER_MATCH: int = 16

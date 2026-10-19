@@ -25,6 +25,31 @@ services:
         condition: service_healthy
     expose:
       - "8000"
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ludo}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ludo_secret}
+      CLICKHOUSE_DB: ludo
+    networks:
+      - ludonet
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ludo}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ludo_secret}
+      CLICKHOUSE_DB: ludo
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./backend/analytics/clickhouse.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+      - ./backend/analytics/init.sql:/docker-entrypoint-initdb.d/01-ludo.sql:ro
+    mem_limit: 384m
     networks:
       - ludonet
 
@@ -48,3 +73,4 @@ networks:
 
 volumes:
   pgdata:
+  chdata:

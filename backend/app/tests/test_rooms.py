@@ -3,10 +3,21 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.analytics.clickhouse import fold_face_counts
 from app.ludo.board import BASE, Color
 from app.ludo.rules import initial_state, next_turn_seat
 from app.ludo.state import Phase, PlayerState
 from app.models.match import MatchStatus
+
+
+def test_score_counts_every_saved_roll():
+    # Five saved sixes must stay five. A reroll used to subtract one only in memory
+    # after the row was already stored, so the board showed 4.
+    rows = [(2, 6), (2, 6), (2, 6), (2, 6), (2, 6), (2, 3)]
+    hist = fold_face_counts(rows)
+    assert hist[2][6] == 5
+    assert hist[2][3] == 1
+    assert sum(hist[2].values()) == 6
 
 
 def test_late_player_starts_in_yard_without_stealing_the_turn():
