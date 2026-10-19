@@ -17,13 +17,13 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.security import AuthError, decode_access_token
 from app.database import SessionLocal
 from app.game.connection import hub
 from app.game.manager import manager
-from app.models import Match, User
+from app.models import Match, MatchSeat, User
 
 router = APIRouter()
 logger = logging.getLogger("ludo.ws")
@@ -81,6 +81,14 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
     if not await hub.connect(match_code, user_id, websocket):
         await websocket.close(code=1013)  # Try Again Later — room at viewer cap
         return
+    rt.viewer_connected()
+    async with SessionLocal() as session:
+        await session.execute(
+            update(MatchSeat)
+            .where(MatchSeat.match_id == match_id, MatchSeat.user_id == user_id)
+            .values(connected=True)
+        )
+        await session.commit()
     try:
         await websocket.send_json(rt.render(user_id))
         while True:
@@ -127,3 +135,14 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
         logger.exception("ws error in match %s", match_code)
     finally:
         await hub.disconnect(match_code, user_id, websocket)
+        if user_id not in hub.viewers(match_code):
+            async with SessionLocal() as session:
+                await session.execute(
+                    update(MatchSeat)
+                    .where(
+                        MatchSeat.match_id == match_id,
+                        MatchSeat.user_id == user_id,
+                    )
+                    .values(connected=False)
+                )
+                await session.commit()

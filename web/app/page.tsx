@@ -67,6 +67,8 @@ import {
   REACTIONS,
   DiceState,
   MatchSummary,
+  MatchLobby,
+  PendingJoiner,
   PlayerStats,
   Poll,
   PollTemplate,
@@ -188,6 +190,7 @@ function Home() {
   const myIdRef = useRef<number | null>(null);
   const leaveMatchRef = useRef<(() => void) | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [joinPulse, setJoinPulse] = useState(0);
 
   // ---- live match socket ----
   const enterMatch = useCallback((code: string) => {
@@ -250,6 +253,8 @@ function Home() {
           notify("warning");
           setNotice("Not enough coins to reroll.");
         }
+      } else if (msg.type === "join_requests") {
+        setJoinPulse((n) => n + 1);
       } else if (msg.type === "kicked") {
         if (msg.user_id === myIdRef.current) {
           notify("warning");
@@ -284,7 +289,7 @@ function Home() {
           api
             .joinMatch(code)
             .then((m) => {
-              if (m.status === "playing") enterMatch(code);
+              if (m.i_am_seated && m.status === "playing") enterMatch(code);
               else setRoom({ code, host: m.created_by === p.id });
             })
             .catch((e) => setError(String(e)));
@@ -331,15 +336,21 @@ function Home() {
     }
   };
 
-  const joinFromList = async (code: string) => {
+  const openRoom = async (m: MatchSummary) => {
     setBusy(true);
     haptic("light");
     try {
-      const m = await api.joinMatch(code);
-      // An unstarted room takes you to its lobby (the host must accept + start);
-      // a game already in progress drops you straight onto the board.
-      if (m.status === "playing") enterMatch(code);
-      else setRoom({ code, host: m.created_by === profile?.id });
+      if (m.i_am_seated && m.status === "playing") {
+        enterMatch(m.code);
+        return;
+      }
+      if (m.i_am_seated || m.request_status === "pending") {
+        setRoom({ code: m.code, host: m.created_by === profile?.id });
+        return;
+      }
+      const joined = await api.joinMatch(m.code);
+      if (joined.i_am_seated && joined.status === "playing") enterMatch(m.code);
+      else setRoom({ code: joined.code, host: joined.created_by === profile?.id });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -393,6 +404,7 @@ function Home() {
         hintToken={hintToken}
         rematch={rematch}
         sock={sockRef.current}
+        joinPulse={joinPulse}
         onLeave={leaveMatch}
       />
     );
@@ -406,6 +418,7 @@ function Home() {
         profile={profile}
         onEnter={enterMatch}
         onBack={() => setRoom(null)}
+        joinPulse={joinPulse}
       />
     );
 
@@ -417,7 +430,7 @@ function Home() {
           busy={busy}
           onPlayBots={playBots}
           onCreateRoom={createRoom}
-          onJoin={joinFromList}
+          onOpen={openRoom}
         />
       )}
       {view === "me" && (
@@ -516,15 +529,15 @@ function Lobby({
   busy,
   onPlayBots,
   onCreateRoom,
-  onJoin,
+  onOpen,
 }: {
   profile: Profile;
   busy: boolean;
   onPlayBots: () => void;
   onCreateRoom: () => void;
-  onJoin: (code: string) => void;
+  onOpen: (match: MatchSummary) => void;
 }) {
-  const [tables, setTables] = useState<MatchSummary[]>([]);
+  const [lobby, setLobby] = useState<MatchLobby>({ mine: [], waiting: [], playing: [] });
   useEffect(() => {
     let alive = true;
     let inflight = false;
@@ -532,8 +545,8 @@ function Lobby({
       if (inflight) return;
       inflight = true;
       try {
-        const t = await api.listMatches();
-        if (alive) setTables(t);
+        const t = await api.listLobby();
+        if (alive) setLobby(t);
       } catch {
         /* ignore */
       } finally {
@@ -552,43 +565,157 @@ function Lobby({
     <Shell className="pb-28">
       <WalletBar profile={profile} />
 
-      {/* the two things you open the app to do — no marketing copy */}
       <div className="grid grid-cols-2 gap-2.5">
         <Tile icon={Bot} title="Quick Game" hot wide disabled={busy} onClick={onPlayBots} />
         <Tile icon={Plus} title="Create Room" wide disabled={busy} onClick={onCreateRoom} />
       </div>
 
-      <div className="flex flex-col gap-2">
-        <SectionLabel className="px-1">Open rooms</SectionLabel>
-        {tables.length === 0 ? (
-          <Card className="text-center text-xs text-muted-foreground">
-            No open rooms right now.
-          </Card>
-        ) : (
-          tables.map((t) => (
-            <button
-              key={t.code}
-              disabled={busy}
-              onClick={() => onJoin(t.code)}
-              className="flex items-center justify-between rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-white/10 transition active:scale-[0.98] disabled:opacity-50"
-            >
-              <div className="flex items-center gap-3">
-                <Users className="size-4 text-muted-foreground" />
-                <div>
-                  <div className="font-bold tracking-wider">{t.code}</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {t.seated}/{t.max_players} seated
-                  </div>
+      <RoomSection
+        title="Your active rooms"
+        empty="No active rooms. Create one or request to join."
+        rooms={lobby.mine}
+        busy={busy}
+        action={(m) =>
+          m.i_am_seated && m.status === "playing"
+            ? "Resume"
+            : m.request_status === "pending"
+              ? "Waiting"
+              : "Open"
+        }
+        onOpen={onOpen}
+      />
+      <RoomSection
+        title="Open rooms"
+        empty="No open rooms right now."
+        rooms={lobby.waiting}
+        busy={busy}
+        action={() => "Request"}
+        onOpen={onOpen}
+      />
+      <RoomSection
+        title="Games in progress"
+        empty="No games you can join right now."
+        rooms={lobby.playing}
+        busy={busy}
+        action={() => "Request"}
+        onOpen={onOpen}
+      />
+    </Shell>
+  );
+}
+
+function RoomSection({
+  title,
+  empty,
+  rooms,
+  busy,
+  action,
+  onOpen,
+}: {
+  title: string;
+  empty: string;
+  rooms: MatchSummary[];
+  busy: boolean;
+  action: (m: MatchSummary) => string;
+  onOpen: (m: MatchSummary) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionLabel className="px-1">{title}</SectionLabel>
+      {rooms.length === 0 ? (
+        <Card className="text-center text-xs text-muted-foreground">{empty}</Card>
+      ) : (
+        rooms.map((t) => (
+          <button
+            key={t.code}
+            disabled={busy}
+            onClick={() => onOpen(t)}
+            className="flex items-center justify-between rounded-2xl bg-card px-4 py-3 text-left ring-1 ring-white/10 transition active:scale-[0.98] disabled:opacity-50"
+          >
+            <div className="flex items-center gap-3">
+              <Users className="size-4 text-muted-foreground" />
+              <div>
+                <div className="font-bold tracking-wider">{t.code}</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {t.host_name ? `${t.host_name} · ` : ""}
+                  {t.seated}/{t.max_players} seated
+                  {t.entry_fee ? ` · ${t.entry_fee} coins` : ""}
                 </div>
               </div>
-              <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-bold text-primary">
-                Join
+            </div>
+            <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-bold text-primary">
+              {action(t)}
+            </span>
+          </button>
+        ))
+      )}
+    </div>
+  );
+}
+
+function JoinRequests({
+  code,
+  pending,
+  colors,
+  busy,
+  onChange,
+  onError,
+}: {
+  code: string;
+  pending: PendingJoiner[];
+  colors: string[];
+  busy: boolean;
+  onChange: (summary: MatchSummary) => void;
+  onError?: (message: string) => void;
+}) {
+  if (pending.length === 0) return null;
+  const guard = async (fn: () => Promise<MatchSummary>) => {
+    try {
+      onChange(await fn());
+    } catch (e) {
+      onError?.(String(e));
+    }
+  };
+  return (
+    <Card>
+      <SectionLabel>Requests to join</SectionLabel>
+      <div className="mt-2.5 flex flex-col gap-3">
+        {pending.map((p) => (
+          <div key={p.user_id} className="flex flex-col gap-2 rounded-xl bg-secondary/50 p-2.5">
+            <div className="flex items-center gap-2">
+              <span className="flex-1 truncate text-sm font-semibold">{p.name}</span>
+              <button
+                disabled={busy}
+                onClick={() => guard(() => api.rejectJoiner(code, p.user_id))}
+                className="rounded-lg px-2 py-1 text-xs font-bold text-muted-foreground"
+              >
+                Decline
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Give colour
               </span>
-            </button>
-          ))
-        )}
+              {colors.map((c) => (
+                <button
+                  key={c}
+                  disabled={busy}
+                  aria-label={c}
+                  onClick={() =>
+                    guard(async () => {
+                      haptic("medium");
+                      return api.acceptJoiner(code, p.user_id, c);
+                    })
+                  }
+                  className="size-7 rounded-full ring-2 ring-white/20 transition active:scale-90"
+                  style={{ background: COLOR_HEX[c] }}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
-    </Shell>
+    </Card>
   );
 }
 
@@ -632,11 +759,13 @@ function WaitingRoom({
   profile,
   onEnter,
   onBack,
+  joinPulse,
 }: {
   room: Room;
   profile: Profile;
   onEnter: (code: string) => void;
   onBack: () => void;
+  joinPulse: number;
 }) {
   const [summary, setSummary] = useState<MatchSummary | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
@@ -670,8 +799,10 @@ function WaitingRoom({
           const s = await api.getMatch(room.code);
           if (!alive) return;
           setSummary(s);
-          if (s.status === "playing") return onEnter(room.code);
-          if (s.status === "abandoned") return onBack();
+          const seated =
+            s.i_am_seated || s.seats.some((seat) => seat.user_id === profile.id);
+          if (s.status === "playing" && seated) return onEnter(room.code);
+          if (s.status === "abandoned" || s.status === "finished") return onBack();
         } catch {
           /* transient */
         }
@@ -697,7 +828,7 @@ function WaitingRoom({
       alive = false;
       clearInterval(id);
     };
-  }, [room.code]);
+  }, [room.code, joinPulse, profile.id]);
 
   const isHost = summary ? summary.created_by === profile.id : room.host;
   const seats = summary?.seats ?? [];
@@ -778,8 +909,12 @@ function WaitingRoom({
             {isHost
               ? `${seats.length}/4 seated`
               : iAmSeated
-                ? "waiting for the host to start"
-                : "waiting to be accepted"}
+                ? summary?.status === "playing"
+                  ? "taking your seat"
+                  : "waiting for the host to start"
+                : summary?.request_status === "rejected"
+                  ? "request declined"
+                  : "waiting for the host"}
           </span>
         </div>
         {isHost && seats.length > 0 && (
@@ -841,48 +976,45 @@ function WaitingRoom({
         </div>
       </Card>
 
-      {isHost && pending.length > 0 && (
-        <Card>
-          <SectionLabel>Requests to join</SectionLabel>
-          <div className="mt-2.5 flex flex-col gap-3">
-            {pending.map((p) => (
-              <div key={p.user_id} className="flex flex-col gap-2 rounded-xl bg-secondary/50 p-2.5">
-                <div className="flex items-center gap-2">
-                  <span className="flex-1 truncate text-sm font-semibold">{p.name}</span>
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      guard(async () =>
-                        setSummary(await api.rejectJoiner(room.code, p.user_id))
-                      )
-                    }
-                    className="rounded-lg px-2 py-1 text-xs font-bold text-muted-foreground"
-                  >
-                    Decline
-                  </button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                    Give colour
-                  </span>
-                  {freeColors.map((c) => (
-                    <button
-                      key={c}
-                      disabled={busy}
-                      aria-label={c}
-                      onClick={() =>
-                        guard(async () => {
-                          haptic("medium");
-                          setSummary(await api.acceptJoiner(room.code, p.user_id, c));
-                        })
-                      }
-                      className="size-7 rounded-full ring-2 ring-white/20 transition active:scale-90"
-                      style={{ background: COLOR_HEX[c] }}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
+      {isHost && (
+        <JoinRequests
+          code={room.code}
+          pending={pending}
+          colors={summary?.available_colors?.length ? summary.available_colors : freeColors}
+          busy={busy}
+          onChange={setSummary}
+          onError={setErr}
+        />
+      )}
+
+      {!isHost && !iAmSeated && (
+        <Card className="text-center text-xs text-muted-foreground">
+          {summary?.request_status === "rejected"
+            ? "The host declined this request."
+            : summary?.status === "playing"
+              ? "Waiting for the host. If accepted, you start with all four tokens in the yard."
+              : "Waiting for the host to accept you."}
+          <div className="mt-3">
+            {summary?.request_status === "pending" ? (
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() =>
+                  guard(async () => setSummary(await api.withdrawJoin(room.code)))
+                }
+              >
+                Withdraw request
+              </Button>
+            ) : (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  guard(async () => setSummary(await api.joinMatch(room.code)))
+                }
+              >
+                Request to join
+              </Button>
+            )}
           </div>
         </Card>
       )}
@@ -1609,6 +1741,7 @@ function LiveMatch({
   hintToken,
   rematch,
   sock,
+  joinPulse,
   onLeave,
 }: {
   code: string;
@@ -1634,10 +1767,13 @@ function LiveMatch({
   hintToken: number | null;
   rematch: { votes: number[]; humanIds: number[] };
   sock: MatchSocket | null;
+  joinPulse: number;
   onLeave: () => void;
 }) {
   const [profileId, setProfileId] = useState<number | null>(null);
   const [showBoard, setShowBoard] = useState(false); // in-game scoreboard sheet
+  const [roomSummary, setRoomSummary] = useState<MatchSummary | null>(null);
+  const [joinErr, setJoinErr] = useState<string | null>(null);
   const mySeat = (() => {
     for (const [seat, uid] of Object.entries(seatUser)) {
       if (uid === profile.id) return Number(seat);
@@ -1647,6 +1783,25 @@ function LiveMatch({
 
   const myTurn = mySeat !== null && state.current === mySeat;
   const finished = state.phase === "finished";
+
+  useEffect(() => {
+    if (finished) return;
+    let alive = true;
+    const load = async () => {
+      try {
+        const s = await api.getMatch(code);
+        if (alive) setRoomSummary(s);
+      } catch {
+        /* transient */
+      }
+    };
+    load();
+    const id = setInterval(load, 3000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [code, joinPulse, finished]);
   const currentColor = state.players[state.current]?.color ?? "";
   const noMoves = !finished && state.phase === "move" && legal.length === 0;
 
@@ -1677,6 +1832,27 @@ function LiveMatch({
           </Button>
         </div>
       </div>
+
+      {joinErr && (
+        <div className="shrink-0 rounded-xl bg-red/10 px-3 py-2 text-center text-xs text-red">
+          {joinErr}
+        </div>
+      )}
+      {roomSummary && roomSummary.created_by === profile.id && (
+        <div className="max-h-40 shrink-0 overflow-y-auto">
+          <JoinRequests
+            code={code}
+            pending={roomSummary.pending}
+            colors={roomSummary.available_colors ?? []}
+            busy={false}
+            onChange={(s) => {
+              setJoinErr(null);
+              setRoomSummary(s);
+            }}
+            onError={setJoinErr}
+          />
+        </div>
+      )}
 
       {finished && (
         /* end-of-game broadcast — winner, standings, rematch */

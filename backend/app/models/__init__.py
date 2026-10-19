@@ -1,6 +1,6 @@
 """Import every model module so they register on Base.metadata for Alembic + create_all."""
 from app.models.user import User
-from app.models.match import Match, MatchSeat, MatchStatus
+from app.models.match import Match, MatchJoinRequest, MatchSeat, MatchStatus
 from app.models.chat import ChatMessage, MessageReaction, ReactionEmoji
 from app.models.event import DiceRoll, Knockout, Card, CardDraw
 from app.models.poll import PollTemplate, Poll, PollOption, PollVote
@@ -10,7 +10,7 @@ from app.models.ledger import Balance, BalanceHistory
 from app.models.wallet import Transfer, StarPayment, TransferStatus, StarPaymentStatus
 
 __all__ = [
-    "User", "Match", "MatchSeat", "MatchStatus",
+    "User", "Match", "MatchSeat", "MatchJoinRequest", "MatchStatus",
     "ChatMessage", "MessageReaction", "ReactionEmoji",
     "DiceRoll", "Knockout", "Card", "CardDraw",
     "PollTemplate", "Poll", "PollOption", "PollVote",

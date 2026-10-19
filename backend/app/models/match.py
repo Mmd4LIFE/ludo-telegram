@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import enum
 import secrets
+from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    DateTime,
     Enum,
     ForeignKey,
     Integer,
     String,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -82,5 +85,38 @@ class MatchSeat(Base, TimestampMixin):
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
     connected: Mapped[bool] = mapped_column(Boolean, default=False)
     place: Mapped[int | None] = mapped_column(Integer, default=None)  # final placement 1..N
+    # NULL for players present at game start; the engine turn when a late joiner entered.
+    joined_at_turn: Mapped[int | None] = mapped_column(Integer, default=None)
 
     match: Mapped["Match"] = relationship(back_populates="seats")
+
+
+class MatchJoinRequest(Base):
+    """Durable request to join a waiting or already-started room.
+
+    One row per match/player is reused when a rejected player requests again. Keeping
+    resolved rows gives us an audit trail without allowing duplicate pending requests.
+    """
+
+    __tablename__ = "match_join_requests"
+    __table_args__ = (
+        UniqueConstraint("match_id", "user_id", name="uq_join_request_match_user"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    match_id: Mapped[int] = mapped_column(
+        ForeignKey("matches.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    resolved_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )

@@ -96,6 +96,7 @@ export interface SeatInfo {
 export interface PendingJoiner {
   user_id: number;
   name: string;
+  requested_at?: string | null;
 }
 
 export interface MatchSummary {
@@ -109,6 +110,17 @@ export interface MatchSummary {
   created_at?: string | null;
   seats: SeatInfo[];
   pending: PendingJoiner[];
+  host_name?: string;
+  i_am_seated?: boolean;
+  request_status?: string | null;
+  joinable?: boolean;
+  available_colors?: string[];
+}
+
+export interface MatchLobby {
+  mine: MatchSummary[];
+  waiting: MatchSummary[];
+  playing: MatchSummary[];
 }
 
 export interface PollOption {
@@ -433,6 +445,7 @@ export const api = {
   diceSkinCatalog: () =>
     req<{ id: string; price: number }[]>("GET", "/api/profile/dice-skins"),
   listMatches: () => req<MatchSummary[]>("GET", "/api/matches"),
+  listLobby: () => req<MatchLobby>("GET", "/api/matches/lobby"),
   getMatch: (code: string) => req<MatchSummary>("GET", `/api/matches/${code}`),
   createMatch: (opts: {
     max_players?: number;
@@ -446,6 +459,8 @@ export const api = {
     req<MatchSummary>("POST", `/api/matches/${code}/accept`, { user_id, color }),
   rejectJoiner: (code: string, user_id: number) =>
     req<MatchSummary>("POST", `/api/matches/${code}/reject`, { user_id }),
+  withdrawJoin: (code: string) =>
+    req<MatchSummary>("POST", `/api/matches/${code}/withdraw`),
   setColor: (code: string, user_id: number, color: string) =>
     req<MatchSummary>("POST", `/api/matches/${code}/color`, { user_id, color }),
   startMatch: (code: string) => req<MatchSummary>("POST", `/api/matches/${code}/start`),

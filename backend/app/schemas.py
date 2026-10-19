@@ -292,6 +292,7 @@ class SeatInfo(BaseModel):
 class PendingJoiner(BaseModel):
     user_id: int
     name: str
+    requested_at: str | None = None
 
 
 class MatchSummary(BaseModel):
@@ -305,6 +306,17 @@ class MatchSummary(BaseModel):
     created_at: str | None = None   # ISO — waiting rooms expire 60m after this
     seats: list[SeatInfo] = []
     pending: list[PendingJoiner] = []   # awaiting the host's approval
+    host_name: str = "Player"
+    i_am_seated: bool = False
+    request_status: str | None = None
+    joinable: bool = False
+    available_colors: list[str] = []
+
+
+class MatchLobby(BaseModel):
+    mine: list[MatchSummary] = []
+    waiting: list[MatchSummary] = []
+    playing: list[MatchSummary] = []
 
 
 class AcceptJoinerRequest(BaseModel):

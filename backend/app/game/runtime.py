@@ -29,6 +29,9 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+from typing import Any
 
 from app.config import settings
 from app.database import SessionLocal
@@ -47,7 +50,7 @@ from app.ludo.rules import _captures_at
 from app.appconfig import runtime_config, TUNABLE
 from app.game import card_catalog
 from app.game.connection import hub
-from app.models import Match, MatchStatus, DiceRoll, Knockout, CardDraw
+from app.models import Match, MatchJoinRequest, MatchStatus, DiceRoll, Knockout, CardDraw
 from app.services import ledger
 from app.services.coin_features import (
     boost_cost,
@@ -55,7 +58,7 @@ from app.services.coin_features import (
     boost_params,
 )
 from app.services.ledger import InsufficientFunds, placement_payout
-from sqlalchemy import insert
+from sqlalchemy import insert, update
 
 logger = logging.getLogger("ludo.runtime")
 
@@ -93,8 +96,12 @@ class MatchRuntime:
         self._queue: asyncio.Queue[tuple[int, dict]] = asyncio.Queue(
             maxsize=max(8, settings.ACTION_QUEUE_MAX)
         )
+        self._controls: asyncio.Queue[
+            tuple[Callable[["MatchRuntime"], Awaitable[Any]], asyncio.Future]
+        ] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._started = False
+        self._viewer_event = asyncio.Event()
         # wall-clock deadline for the current human action (unix seconds) — the client
         # renders a countdown against it; None when it's a bot's turn / no clock.
         self._deadline: float | None = None
@@ -158,6 +165,10 @@ class MatchRuntime:
     def is_done(self) -> bool:
         return self._task is not None and self._task.done()
 
+    def viewer_connected(self) -> None:
+        """Wake a paused human game as soon as any viewer reconnects."""
+        self._viewer_event.set()
+
     def submit(self, user_id: int, msg: dict) -> None:
         """Called by the ws route with a human action ({'type': 'roll'|'move', ...})."""
         try:
@@ -172,6 +183,60 @@ class MatchRuntime:
                 self._queue.put_nowait((user_id, msg))
             except asyncio.QueueFull:
                 logger.warning("action queue full for match %s; dropping", self.code)
+
+    async def run_control(
+        self, callback: Callable[["MatchRuntime"], Awaitable[Any]]
+    ) -> Any:
+        """Run a membership/control mutation on the driver task.
+
+        This keeps the runtime a single writer: controls execute between state
+        transitions or while a human action wait is safely suspended.
+        """
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        await self._controls.put((callback, future))
+        self._viewer_event.set()  # also wake a room paused with no viewers
+        return await future
+
+    async def _execute_control(self, item=None) -> bool:
+        if item is None:
+            try:
+                item = self._controls.get_nowait()
+            except asyncio.QueueEmpty:
+                return False
+        callback, future = item
+        if future.cancelled():
+            return True
+        try:
+            future.set_result(await callback(self))
+        except Exception as exc:  # noqa: BLE001 - deliver to the waiting REST request
+            future.set_exception(exc)
+        return True
+
+    def install_late_player(
+        self,
+        *,
+        state: GameState,
+        seat: int,
+        user_id: int,
+        color: Color,
+        name: str,
+        level: int,
+        skin: str,
+    ) -> None:
+        """Install the already-committed durable membership into this runtime."""
+        self.state = state
+        self.seat_user[seat] = user_id
+        self.seat_is_bot[seat] = False
+        self.seat_names[seat] = name or "Player"
+        self.seat_levels[seat] = level or 1
+        self.seat_skins[seat] = skin or "classic"
+        self.seat_missed[seat] = 0
+        self.game_dice.setdefault(seat, {})
+        self.game_dealt.setdefault(seat, 0)
+        self.game_taken.setdefault(seat, 0)
+        self.game_potential.setdefault(seat, 0)
+        self.pot_reward.setdefault(seat, 0)
 
     # ---- helpers ----------------------------------------------------------
     @staticmethod
@@ -208,8 +273,25 @@ class MatchRuntime:
             while deadline > 0:
                 loop = asyncio.get_event_loop()
                 t0 = loop.time()
-                user_id, msg = await asyncio.wait_for(self._queue.get(), timeout=deadline)
+                action_task = asyncio.create_task(self._queue.get())
+                control_task = asyncio.create_task(self._controls.get())
+                done, pending = await asyncio.wait(
+                    {action_task, control_task},
+                    timeout=deadline,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                if not done:
+                    return None
                 deadline -= loop.time() - t0
+                if control_task in done:
+                    await self._execute_control(control_task.result())
+                    if action_task in done:
+                        # Preserve a simultaneous player action for the next drain.
+                        self.submit(*action_task.result())
+                    continue
+                user_id, msg = action_task.result()
                 if self.seat_user.get(seat) == user_id and msg.get("type") in wanted:
                     return msg
                 # ignore stale/foreign input and keep waiting
@@ -227,14 +309,20 @@ class MatchRuntime:
                 logger.exception("could not load runtime config for %s; using defaults", self.code)
             await self._broadcast()
             while self.state.phase is not Phase.FINISHED:
-                # A human match with nobody watching shouldn't keep grinding through
-                # 20s turn-timeouts on a tiny box. Give a grace window for a reconnect,
-                # then abandon it and let the janitor reap the runtime.
+                while await self._execute_control():
+                    pass
+                # A viewer-less human match pauses instead of advancing timeouts or
+                # being abandoned. Its durable state remains resumable indefinitely.
                 if not self.is_bot_table and not self._human_watching():
-                    await asyncio.sleep(settings.IDLE_SEAT_GRACE_SECONDS)
-                    if not self._human_watching():
-                        await self._abandon()
-                        return
+                    if self._persist_dirty or self._has_event_buffers():
+                        await self._persist()
+                    self._deadline = None
+                    self._viewer_event.clear()
+                    # A late-join control may have set the event before this clear.
+                    if self._human_watching() or not self._controls.empty():
+                        continue
+                    await self._viewer_event.wait()
+                    await self._broadcast()
                     continue
                 await self._step()
                 self._steps_since_persist += 1
@@ -413,6 +501,10 @@ class MatchRuntime:
 
     def _should_persist(self) -> bool:
         """Persist on a cadence, when event buffers grow, or when the game ends."""
+        # Human rooms are recoverable after a backend restart. Persist every completed
+        # transition so the durable board never trails several moves behind.
+        if not self.is_bot_table:
+            return True
         n = max(1, settings.PERSIST_EVERY_N_STEPS)
         if self.state.phase is Phase.FINISHED:
             return True
@@ -988,9 +1080,23 @@ class MatchRuntime:
                 self.buf_cards = []
             # Fold dice/capture deltas into lifetime totals in the same commit.
             await self._flush_stats(session)
+            # Late joining closes for good once anyone has finished.
+            if self.state.ranking:
+                await self._expire_pending(session)
             await session.commit()
         self._steps_since_persist = 0
         self._persist_dirty = False
+
+    async def _expire_pending(self, session) -> None:
+        now = datetime.now(timezone.utc)
+        await session.execute(
+            update(MatchJoinRequest)
+            .where(
+                MatchJoinRequest.match_id == self.match_id,
+                MatchJoinRequest.status == "pending",
+            )
+            .values(status="expired", resolved_at=now)
+        )
 
     async def _kick(self, seat: int) -> None:
         """A human who keeps missing rolls is REMOVED (not replaced by a bot): their
@@ -1021,6 +1127,7 @@ class MatchRuntime:
             if m is not None and m.status is not MatchStatus.FINISHED:
                 m.status = MatchStatus.ABANDONED
             await self._flush_stats(session)
+            await self._expire_pending(session)
             await session.commit()
         logger.info("match %s abandoned (no viewers)", self.code)
 
@@ -1162,5 +1269,6 @@ class MatchRuntime:
                         ref_id=self.match_id,
                         meta={"place": place, "humans": human_count},
                     )
+            await self._expire_pending(session)
             await session.commit()
         logger.info("match %s finished, ranking=%s", self.code, self.state.ranking)
