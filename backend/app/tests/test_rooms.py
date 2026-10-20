@@ -3,11 +3,31 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.analytics.clickhouse import fold_face_counts
+from datetime import datetime, timezone
+
+from app.analytics.clickhouse import backoff_seconds, fold_face_counts, knock_payload, roll_payload
+from app.models import DiceRoll, Knockout
 from app.ludo.board import BASE, Color
 from app.ludo.rules import initial_state, next_turn_seat
 from app.ludo.state import Phase, PlayerState
 from app.models.match import MatchStatus
+
+
+def test_outbox_payload_and_backoff():
+    stamped = datetime(2026, 10, 19, 16, 41, tzinfo=timezone.utc)
+    roll = roll_payload(DiceRoll(
+        id=8696, match_id=193, user_id=32, seat=0, value=6, turn=130, created_at=stamped,
+    ))
+    assert roll["id"] == 8696 and roll["value"] == 6
+    assert roll["created_at"] == "2026-10-19 16:41:00.000"
+    knock = knock_payload(Knockout(
+        id=4, match_id=193, turn=3, attacker_user_id=32, attacker_seat=0,
+        victim_user_id=None, victim_seat=1, taken=True, created_at=stamped,
+    ))
+    assert knock["victim_user_id"] == 0 and knock["taken"] == 1
+    assert backoff_seconds(0) == 1
+    assert backoff_seconds(3) == 8
+    assert backoff_seconds(20) == 256
 
 
 def test_score_counts_every_saved_roll():

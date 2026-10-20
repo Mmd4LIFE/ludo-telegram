@@ -41,15 +41,14 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logger.exception("Bot setup failed (continuing without bot)")
     manager.start_janitor()
-    from app.analytics.clickhouse import ensure_schema
+    from app.analytics.clickhouse import start as start_analytics
+    from app.analytics.clickhouse import stop as stop_analytics
 
-    try:
-        await ensure_schema()
-    except Exception:  # noqa: BLE001
-        logger.exception("ClickHouse schema setup failed (scores stay in Postgres)")
+    start_analytics()
     insights_task = asyncio.create_task(insights_bootstrap())
     yield
     insights_task.cancel()
+    await stop_analytics()
     await manager.shutdown()
     await shutdown_bot()
     await close_insights_pool()

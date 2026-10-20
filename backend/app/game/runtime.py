@@ -1099,16 +1099,16 @@ class MatchRuntime:
             m.state = self.state.to_dict()
             if self.state.phase is not Phase.FINISHED:
                 m.status = MatchStatus.PLAYING
-            # Insert event rows so they get ids, then copy those rows to ClickHouse.
-            roll_copy: list[dict] = []
-            knock_copy: list[dict] = []
+            # Same transaction as the outbox row, so a roll cannot be saved
+            # without a ClickHouse copy queued behind it.
+            stamped = datetime.now(timezone.utc)
             if self.buf_rolls:
-                roll_objs = [DiceRoll(**row) for row in self.buf_rolls]
+                roll_objs = [DiceRoll(**row, created_at=stamped) for row in self.buf_rolls]
                 session.add_all(roll_objs)
             else:
                 roll_objs = []
             if self.buf_knocks:
-                knock_objs = [Knockout(**row) for row in self.buf_knocks]
+                knock_objs = [Knockout(**row, created_at=stamped) for row in self.buf_knocks]
                 session.add_all(knock_objs)
             else:
                 knock_objs = []
@@ -1117,24 +1117,8 @@ class MatchRuntime:
                 self.buf_cards = []
             if roll_objs or knock_objs:
                 await session.flush()
-            roll_copy = [
-                {
-                    "id": o.id, "match_id": o.match_id, "user_id": o.user_id,
-                    "seat": o.seat, "value": o.value, "turn": o.turn,
-                }
-                for o in roll_objs
-            ]
-            knock_copy = [
-                {
-                    "id": o.id, "match_id": o.match_id, "turn": o.turn,
-                    "attacker_user_id": o.attacker_user_id,
-                    "attacker_seat": o.attacker_seat,
-                    "victim_user_id": o.victim_user_id or 0,
-                    "victim_seat": o.victim_seat,
-                    "taken": 1 if o.taken else 0,
-                }
-                for o in knock_objs
-            ]
+                analytics.queue_rolls(session, roll_objs)
+                analytics.queue_knocks(session, knock_objs)
             # Fold dice/capture deltas into lifetime totals in the same commit.
             await self._flush_stats(session)
             # Late joining closes for good once anyone has finished.
@@ -1145,10 +1129,6 @@ class MatchRuntime:
             self.buf_knocks = []
         self._steps_since_persist = 0
         self._persist_dirty = False
-        if roll_copy:
-            asyncio.create_task(analytics.insert_rolls(roll_copy))
-        if knock_copy:
-            asyncio.create_task(analytics.insert_knocks(knock_copy))
 
     async def _expire_pending(self, session) -> None:
         now = datetime.now(timezone.utc)
