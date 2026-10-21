@@ -33,6 +33,9 @@ import {
   Layers,
   RotateCw,
   Star,
+  Stars,
+  Crosshair,
+  RotateCcw,
   ShieldCheck,
   Dices,
   Snowflake,
@@ -1910,6 +1913,11 @@ function LiveMatch({
           seatPotential={gameStats.potential}
           removedSeats={removedSeats}
           clock={clock}
+          kickTargets={card?.stage === "target" && card.seat === mySeat ? card.tokens : undefined}
+          onKick={(seat, ti) => {
+            haptic("medium");
+            sock?.pickTarget(seat, ti);
+          }}
           onMove={(ti) => {
             haptic("light");
             sock?.move(ti);
@@ -2070,6 +2078,9 @@ function LiveMatch({
 const CARD_ICON: Record<string, LucideIcon> = {
   extra_roll: RotateCw,
   active_stars: Star,
+  all_stars: Stars,
+  direct_kick: Crosshair,
+  vertigo: RotateCcw,
   shield_one: Shield,
   shield_all: ShieldCheck,
   double_dice: Dices,
@@ -2197,6 +2208,26 @@ function ChanceBox({
       {reasonText}
     </div>
   );
+
+  // Direct Kick keeps the board visible so the drawer can tap a piece.
+  if (stage === "target" && (card.tokens?.length ?? 0) > 0) {
+    const rc = pickedCard ? rarityColor(pickedCard.rarity) : "#7c8698";
+    return (
+      <div className="pointer-events-none fixed inset-x-0 top-3 z-[70] flex justify-center px-4">
+        <div className="lb-pop flex max-w-sm items-center gap-3 rounded-2xl bg-card/95 px-4 py-2.5 shadow-xl ring-1 ring-white/10 backdrop-blur">
+          <div className="grid size-9 shrink-0 place-items-center rounded-xl" style={{ background: rc + "22" }}>
+            {pickedCard && <CardIcon id={pickedCard.id} size={20} color={rc} />}
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+            <div className="text-sm font-extrabold">
+              {mine ? "Tap an opponent's piece" : `${drawerName} is choosing a piece`}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Result: a slim, non-blocking banner so the BOARD stays visible and plays the effect
   // out (a Recall token gliding back, a Swap, a shield appearing) while it's announced.
@@ -2465,6 +2496,12 @@ function demoScene(id: string, on: boolean): DemoScene {
       return { pieces: [{ key: "y", kind: "you", cell: on ? 4 : 2 }], die: on ? 6 : 4, caption: "Take another roll" };
     case "active_stars":
       return { pieces: [{ key: "y", kind: "you", cell: 4 }], star: 4, starOn: on, caption: "Your stars turn safe" };
+    case "all_stars":
+      return { pieces: [{ key: "y", kind: "you", cell: 3 }], star: 4, starOn: on, caption: "Every neutral star turns yours" };
+    case "direct_kick":
+      return { pieces: [{ key: "r", kind: "rival", cell: on ? 0 : 5, hidden: on }], caption: "Send a piece back to its yard" };
+    case "vertigo":
+      return { pieces: [{ key: "r", kind: "rival", cell: on ? 2 : 6 }], die: 4, caption: "Their next roll steps back" };
     case "shield_one":
       return { pieces: [{ key: "y", kind: "you", cell: 5, shield: true }, { key: "r", kind: "rival", cell: on ? 5 : 3 }], caption: "A piece can't be captured" };
     case "shield_all":

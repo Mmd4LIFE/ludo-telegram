@@ -17,6 +17,7 @@ export interface GameState {
   turn: number;
   ranking: number[];
   active_stars: number[]; // colour values whose neutral stars are live/safe
+  star_claim?: number | null; // colour value that owns every neutral star
   roll_face?: number | null;
   // fantasy-card buffs, each keyed by seat string
   effects?: {
@@ -25,6 +26,7 @@ export interface GameState {
     skip?: Record<string, number>;
     second_chance?: Record<string, number>;
     toll?: Record<string, number>;
+    vertigo?: Record<string, number>;
   };
 }
 
@@ -41,6 +43,7 @@ export interface CardDraw {
   options?: string[]; // card ids — present from the reveal stage on (or after peek)
   picked?: number; // chosen index — present from the reveal stage on
   targets?: number[]; // seats the drawer may target (stage "target")
+  tokens?: [number, number][]; // [seat, token] pieces Direct Kick may send home
   target?: number | null; // the seat actually hit (stage "result")
   reason?: string; // why the card was drawn: "home" | "couldve" | "bought"
   peeked?: boolean;
@@ -183,8 +186,8 @@ export class MatchSocket {
   pickCard(index: number): void {
     this.send({ type: "pick_card", index });
   }
-  pickTarget(seat: number): void {
-    this.send({ type: "pick_target", seat });
+  pickTarget(seat: number, token?: number): void {
+    this.send(token == null ? { type: "pick_target", seat } : { type: "pick_target", seat, token });
   }
 
   close(): void {

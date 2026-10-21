@@ -291,6 +291,52 @@ def _assert_state_legal(s, moves) -> None:
             assert m.dst - m.src == s.die
 
 
+def test_vertigo_steps_back_within_reach() -> None:
+    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+    # 10 can retreat 5; 2 cannot; home-column (51) cannot; yard cannot.
+    s.players[0].tokens = [10, 2, 51, BASE]
+    s.set_eff("vertigo", 0, 1)
+    register_roll(s, 5)
+    moves = {m.token_index: m for m in legal_moves(s)}
+    _check("only the piece that can retreat 5 is legal", set(moves) == {0})
+    _check("it lands 5 steps back", moves[0].dst == 5)
+    res = apply_move(s, moves[0])
+    _check("token moved back to 5", s.players[0].tokens[0] == 5)
+    _check("vertigo lasts one roll", s.eff("vertigo", 0) == 0)
+    _check("a non-six does not grant another roll", not res.extra_turn)
+
+
+def test_vertigo_cannot_leave_the_yard_on_a_six() -> None:
+    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+    s.set_eff("vertigo", 0, 1)
+    register_roll(s, 6)
+    _check("a six does not release a piece while dizzy", legal_moves(s) == [])
+    res = apply_move(s, None)
+    _check("pieces stay in the yard", s.players[0].tokens == [BASE, BASE, BASE, BASE])
+    _check("the dizzy roll is still spent", s.eff("vertigo", 0) == 0)
+    _check("the six still earns another roll", res.extra_turn)
+
+
+def test_all_stars_protects_only_the_claimer() -> None:
+    # GREEN's neutral star is absolute 21. RED progress 21 sits there.
+    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+    s.star_claim = Color.RED.value
+    s.players[0].tokens[0] = 21
+    s.players[1].tokens[0] = 42          # YELLOW, 5 steps short of abs 21
+    s.current = 1
+    register_roll(s, 5)
+    moves = [m for m in legal_moves(s) if m.token_index == 0]
+    _check("claimer is safe on someone else's star", moves and moves[0].captures == ())
+
+    s = initial_state(2, seat_colors=[Color.RED, Color.YELLOW])
+    s.star_claim = Color.RED.value
+    s.players[1].tokens[0] = 47          # YELLOW on abs 21
+    s.players[0].tokens[0] = 16          # RED, 5 steps short of abs 21
+    register_roll(s, 5)
+    moves = [m for m in legal_moves(s) if m.token_index == 0]
+    _check("everyone else can be captured on a claimed star", moves and moves[0].captures == ((1, 0),))
+
+
 def test_fuzz_games() -> None:
     for seed in range(300):
         _play_random_game(seed)
@@ -314,6 +360,9 @@ def run_all() -> None:
         test_double_movement_keeps_release_on_face,
         test_six_with_no_move_keeps_the_turn,
         test_must_land_home_exactly,
+        test_vertigo_steps_back_within_reach,
+        test_vertigo_cannot_leave_the_yard_on_a_six,
+        test_all_stars_protects_only_the_claimer,
         test_fuzz_games,
     ):
         print(f"\n{fn.__name__}:")

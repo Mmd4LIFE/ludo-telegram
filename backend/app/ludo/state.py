@@ -25,8 +25,9 @@ class Phase(str, Enum):
 #   skip          seat -> upcoming turns to skip (frozen)
 #   second_chance seat -> 1 while a one-shot "don't get knocked home" is armed
 #   toll          seat -> rounds its neutral star blocks rivals from landing on it
+#   vertigo       seat -> upcoming rolls that step backward instead of forward
 # double_mult: Twin Dice movement multiplier (2/3/4) while ``double`` charges remain
-_EFFECT_KEYS = ("shield", "double", "double_mult", "skip", "second_chance", "toll")
+_EFFECT_KEYS = ("shield", "double", "double_mult", "skip", "second_chance", "toll", "vertigo")
 
 
 def _default_effects() -> dict[str, dict[int, int]]:
@@ -90,6 +91,9 @@ class GameState:
     # colour VALUES (0..3) whose neutral stars are active (safe) — set by the
     # "Active Stars" fantasy card. Empty by default: neutral stars protect no one.
     active_stars: list[int] = field(default_factory=list)
+    # colour VALUE that owns every neutral star (All Stars). None until that card is played.
+    # While set, those four stars are safe only for this colour and render in its colour.
+    star_claim: int | None = None
     # the actual die FACE last rolled (1..6). ``die`` is the effective MOVEMENT value,
     # which the Twin Dice card can double — so release-from-base / six logic keys off
     # roll_face while distance keys off die.
@@ -133,6 +137,7 @@ class GameState:
             "turn": self.turn,
             "ranking": list(self.ranking),
             "active_stars": list(self.active_stars),
+            "star_claim": self.star_claim,
             "roll_face": self.roll_face,
             # JSON object keys must be strings — seats are re-parsed to int in from_dict
             "effects": {
@@ -160,6 +165,7 @@ class GameState:
             turn=d.get("turn", 0),
             ranking=list(d.get("ranking", [])),
             active_stars=list(d.get("active_stars", [])),
+            star_claim=d.get("star_claim"),
             roll_face=d.get("roll_face"),
             effects={
                 key: {int(s): int(v) for s, v in (d.get("effects", {}).get(key) or {}).items()}

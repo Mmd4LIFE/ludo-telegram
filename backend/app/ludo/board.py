@@ -29,7 +29,9 @@ Safe squares: by default ONLY the four coloured start cells are safe, each a pri
 sanctuary for its own colour. The four *neutral* star cells (eight steps past each start)
 are NOT safe for anyone — they are inert until a player activates their colour's stars via
 the "Active Stars" fantasy card, after which that colour is safe on its own neutral star.
-Everywhere else on the ring, landing on a lone opponent captures it.
+"All Stars" instead claims every neutral star for one colour (GameState.star_claim):
+all four turn that colour and only that colour is safe on them. Home-column squares
+are never part of this. Everywhere else on the ring, landing on a lone opponent captures it.
 """
 from __future__ import annotations
 

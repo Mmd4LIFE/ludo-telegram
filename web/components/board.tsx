@@ -146,6 +146,8 @@ export default function Board({
   clock,
   onMove,
   onPlayerTap,
+  kickTargets,
+  onKick,
 }: {
   state: GameState;
   legal: LegalMove[];
@@ -161,15 +163,20 @@ export default function Board({
   clock: { deadline: number | null; now: number; recvAt: number; turnSeconds: number } | null;
   onMove: (tokenIndex: number) => void;
   onPlayerTap?: (userId: number) => void;
+  kickTargets?: [number, number][];
+  onKick?: (seat: number, token: number) => void;
 }) {
   const removed = new Set(removedSeats);
   const activeStars = new Set((state.active_stars ?? []).map((v) => COLOR_BY_VALUE[v]));
+  const claimed = state.star_claim != null ? COLOR_BY_VALUE[state.star_claim] : null;
   const eff = state.effects ?? {};
   const seatsWith = (m?: Record<string, number>) =>
     new Set(Object.entries(m ?? {}).filter(([, v]) => v > 0).map(([s]) => Number(s)));
   const shielded = seatsWith(eff.shield);
   const frozen = seatsWith(eff.skip);
   const doubled = seatsWith(eff.double);
+  const dizzy = seatsWith(eff.vertigo);
+  const kickable = new Set((kickTargets ?? []).map(([seat, ti]) => `${seat}:${ti}`));
   const movable = new Set(legal.map((m) => m.token_index));
   const myTurn = mySeat !== null && state.current === mySeat && state.phase === "move";
   const moverColor = state.players[state.current]?.color ?? "RED";
@@ -302,18 +309,19 @@ export default function Board({
           );
         })}
 
-        {/* neutral stars — inert grey until their colour lights them up (Starfall card),
-            then shown in that colour to signal the square is now safe for the owner */}
+        {/* neutral stars — grey until Starfall lights that colour's own star.
+            All Stars paints every one in the claimer's colour. */}
         {Object.entries(NEUTRAL_STARS).map(([absStr, col]) => {
           const abs = Number(absStr);
           const [c, r] = TRACK[abs];
           const [x, y] = px(c, r);
-          const on = activeStars.has(col);
+          const on = claimed != null || activeStars.has(col);
+          const fill = claimed ? COLORS[claimed] : COLORS[col];
           return (
             <polygon
               key={`neutral-${abs}`}
               points={starPts(x, y, CELL * (on ? 0.3 : 0.24))}
-              fill={on ? COLORS[col] : "#cdd2db"}
+              fill={on ? fill : "#cdd2db"}
               opacity={on ? 0.95 : 0.4}
               transform={`rotate(${-rot} ${x} ${y})`}
             />
@@ -376,14 +384,21 @@ export default function Board({
             oy = Math.sin(ang) * rad;
           }
           const r = CELL * (n > 1 ? 0.24 : 0.32);
+          const canKick = kickable.has(`${t.seat}:${t.ti}`);
           return (
             <g
               key={`${t.seat}-${t.ti}`}
-              onClick={t.canMove ? () => onMove(t.ti) : undefined}
+              onClick={
+                canKick && onKick
+                  ? () => onKick(t.seat, t.ti)
+                  : t.canMove
+                    ? () => onMove(t.ti)
+                    : undefined
+              }
               style={{
                 transform: `translate(${bx + ox}px, ${by + oy}px)`,
                 transition: "transform 380ms cubic-bezier(0.34,1.2,0.64,1)",
-                cursor: t.canMove ? "pointer" : "default",
+                cursor: canKick || t.canMove ? "pointer" : "default",
               }}
             >
               <circle cx={0} cy={0} r={r + 1.5} fill="#00000022" />
@@ -392,7 +407,16 @@ export default function Board({
                   <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="6s" repeatCount="indefinite" />
                 </circle>
               )}
-              <circle cx={0} cy={0} r={r} fill={COLORS[t.color]} stroke={t.canMove ? "#111827" : "#ffffff"} strokeWidth={t.canMove ? 2.5 : 2} />
+              {dizzy.has(t.seat) && t.prog >= 0 && t.prog < 56 && (
+                <circle cx={0} cy={0} r={r + 4} fill="none" stroke="#e0a44a" strokeWidth={2} strokeDasharray="2 2" />
+              )}
+              {canKick && (
+                <circle cx={0} cy={0} r={r + 5} fill="none" stroke="#e5484d" strokeWidth={2.5}>
+                  <animate attributeName="r" values={`${r + 4};${r + 9};${r + 4}`} dur="1s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.95;0.2;0.95" dur="1s" repeatCount="indefinite" />
+                </circle>
+              )}
+              <circle cx={0} cy={0} r={r} fill={COLORS[t.color]} stroke={canKick || t.canMove ? "#111827" : "#ffffff"} strokeWidth={canKick || t.canMove ? 2.5 : 2} />
               <circle cx={0} cy={-r * 0.28} r={r * 0.32} fill="#ffffff" opacity={0.6} />
               {t.canMove && (
                 <circle cx={0} cy={0} r={r + 4} fill="none" stroke={COLORS[t.color]} strokeWidth={2.5}>

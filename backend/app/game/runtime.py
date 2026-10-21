@@ -776,7 +776,32 @@ class MatchRuntime:
         await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
 
         target: int | None = None
-        targets = self._valid_targets(seat, effect)
+        kicked: int | None = None
+        resolved = effect
+        if effect == "mirror":
+            resolved = next((e for s, e in reversed(self._recent_cards) if s != seat), None)
+        kickable = self._kickable_tokens(seat) if resolved == "direct_kick" else None
+        if kickable:
+            self._card = {
+                "seat": seat, "stage": "target", "options": options,
+                "picked": idx, "tokens": kickable, "reason": reason,
+            }
+            self._deadline = time.time() + self.cfg["CARD_PICK_SECONDS"]
+            await self._broadcast()
+            got = await self._drain_for(seat, "pick_target", self.cfg["CARD_PICK_SECONDS"])
+            self._deadline = None
+            chosen_seat, chosen_tok = None, None
+            if got is not None:
+                try:
+                    chosen_seat = int(got.get("seat"))
+                    chosen_tok = int(got.get("token"))
+                except (TypeError, ValueError):
+                    chosen_seat, chosen_tok = None, None
+            if [chosen_seat, chosen_tok] in kickable:
+                target, kicked = chosen_seat, chosen_tok
+            else:
+                target, kicked = self._default_kick(kickable)
+        targets = None if kickable is not None else self._valid_targets(seat, effect)
         if targets:
             if len(targets) == 1:
                 target = targets[0]
@@ -830,7 +855,7 @@ class MatchRuntime:
         await self._broadcast()
         await asyncio.sleep(settings.CARD_RESULT_DELAY)
 
-        affected = self._apply_card(seat, effect, target, params)
+        affected = self._apply_card(seat, effect, target, params, kicked)
         self.buf_cards.append({
             "match_id": self.match_id, "user_id": uid, "seat": seat,
             "options": options, "picked": picked, "turn": turn_no,
@@ -842,10 +867,10 @@ class MatchRuntime:
         self._card = None
         await self._broadcast()
 
-    # cards whose effect lands on a chosen opponent
-    _TARGETING = frozenset({"lock", "lock2", "recall", "swap"})
+    # cards whose effect lands on a chosen opponent (Direct Kick picks a piece, not a seat)
+    _TARGETING = frozenset({"lock", "lock2", "recall", "swap", "vertigo"})
     # disruptive cards a finished player may still play (no self-benefit, hits rivals)
-    _OFFENSIVE = frozenset({"lock", "lock2", "recall", "toll"})
+    _OFFENSIVE = frozenset({"lock", "lock2", "recall", "toll", "direct_kick", "vertigo"})
 
     def _valid_targets(self, seat: int, effect: str) -> list[int] | None:
         """Seats a targeting card may hit, or None if the card isn't targeted. [] means
@@ -877,6 +902,7 @@ class MatchRuntime:
         effect: str,
         target: int | None = None,
         boost: dict | None = None,
+        token: int | None = None,
     ) -> int | None:
         """Apply a drawn card's effect. ``boost`` holds paid upgrade params."""
         boost = boost or {}
@@ -890,6 +916,17 @@ class MatchRuntime:
             c = st.players[seat].color.value
             if c not in st.active_stars:
                 st.active_stars.append(c)
+        elif effect == "all_stars":
+            st.star_claim = st.players[seat].color.value
+        elif effect == "direct_kick":
+            if target is not None and token is not None:
+                self._direct_kick(seat, target, token)
+            return target
+        elif effect == "vertigo":
+            tgt = target if target is not None else self._leading_rival(seat)
+            if tgt is not None:
+                st.set_eff("vertigo", tgt, 1)
+            return tgt
         elif effect == "shield":
             st.set_eff("shield", seat, int(boost.get("rounds", 3)))
         elif effect == "shield_all":
@@ -937,7 +974,7 @@ class MatchRuntime:
                 (eff for s, eff in reversed(self._recent_cards) if s != seat), None
             )
             if mirrored:
-                return self._apply_card(seat, mirrored, target, boost)
+                return self._apply_card(seat, mirrored, target, boost, token)
         return None
 
     def _grant_turn(self, seat: int) -> None:
@@ -948,6 +985,63 @@ class MatchRuntime:
             st.die = None
             st.roll_face = None
             st.consecutive_sixes = 0
+
+    def _kickable_tokens(self, seat: int) -> list[list[int]]:
+        """Opponent pieces on the board (ring or home column), not the yard or a finished home.
+
+        A shielded seat cannot be kicked. The yard is the coloured home corner, so a kick
+        sends the piece there (BASE), not into the finish square.
+        """
+        out: list[list[int]] = []
+        for s, p in enumerate(self.state.players):
+            if s == seat or p.all_home():
+                continue
+            if self.state.eff("shield", s) > 0:
+                continue
+            for i, prog in enumerate(p.tokens):
+                if 0 <= prog < HOME:
+                    out.append([s, i])
+        return out
+
+    def _default_kick(self, options: list[list[int]]) -> tuple[int, int]:
+        best = options[0]
+        best_p = -1
+        for s, i in options:
+            prog = self.state.players[s].tokens[i]
+            if prog > best_p:
+                best, best_p = [s, i], prog
+        return best[0], best[1]
+
+    def _direct_kick(self, seat: int, rival: int, token: int) -> None:
+        """Send one chosen opponent piece back to its yard. Second Wind saves it once."""
+        if not (0 <= rival < len(self.state.players)):
+            return
+        tokens = self.state.players[rival].tokens
+        if not (0 <= token < len(tokens)) or not (0 <= tokens[token] < HOME):
+            return
+        if self.state.eff("second_chance", rival) > 0:
+            self.state.set_eff("second_chance", rival, 0)
+            return
+        tokens[token] = BASE
+        self.game_dealt[seat] = self.game_dealt.get(seat, 0) + 1
+        mover = self._human_uid(seat)
+        if mover is not None:
+            self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + 1
+        self.game_taken[rival] = self.game_taken.get(rival, 0) + 1
+        victim = self._human_uid(rival)
+        if victim is not None:
+            self.stat_taken[victim] = self.stat_taken.get(victim, 0) + 1
+            if victim in self._insured:
+                self._insured.discard(victim)
+                pay = max(0, int(self.cfg.get("INSURANCE_PAYOUT", 30)))
+                if pay:
+                    self.stat_insurance[victim] = self.stat_insurance.get(victim, 0) + pay
+        if mover is not None:
+            self.buf_knocks.append({
+                "match_id": self.match_id, "turn": self.state.turn,
+                "attacker_user_id": mover, "attacker_seat": seat,
+                "victim_user_id": victim, "victim_seat": rival, "taken": True,
+            })
 
     def _ring_tokens(self, seat: int) -> list[int]:
         """Token indices of a seat that are on the shared ring (0..50), lead first."""

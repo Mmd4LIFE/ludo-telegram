@@ -31,6 +31,7 @@ from app.ludo.board import (
     TURN_ORDER,
     Color,
     absolute_square,
+    in_home_column,
     neutral_star_owner,
     safe_owner,
 )
@@ -162,7 +163,25 @@ def legal_moves(state: GameState, die: int | None = None) -> list[Move]:
     blocked = set() if explicit else _blocked_squares(state, state.current_player.color)
 
     player = state.current_player
-    moves: list[Move] = []
+    if state.eff("vertigo", state.current) > 0:
+        # The face steps backward. A piece already in the home column cannot retreat,
+        # and a piece cannot step back past its own start (progress 0) into the yard.
+        steps = state.roll_face if (not explicit and state.roll_face) else die
+        moves: list[Move] = []
+        for idx, prog in enumerate(player.tokens):
+            if prog < 0 or in_home_column(prog):
+                continue
+            dst = prog - steps
+            if dst < 0:
+                continue
+            if blocked:
+                sq = absolute_square(player.color, dst)
+                if sq is not None and sq in blocked:
+                    continue
+            moves.append(_build_move(state, idx, prog, dst))
+        return moves
+
+    moves = []
     for idx, prog in enumerate(player.tokens):
         if prog == BASE:
             # a release always lands on your OWN start, which is never a rival's toll star
@@ -209,6 +228,7 @@ def _captures_at(state: GameState, mover: Color, dst: int) -> list[tuple[int, in
     owner = safe_owner(dst_sq)               # start-square sanctuary colour, or None
     nstar = neutral_star_owner(dst_sq)       # neutral-star colour, or None
     active = set(state.active_stars)         # colours whose neutral stars are live
+    claim = state.star_claim                  # colour that owns every neutral star, or None
 
     hits: dict[int, tuple[list[int], Color]] = {}
     for seat, p in enumerate(state.players):
@@ -223,7 +243,10 @@ def _captures_at(state: GameState, mover: Color, dst: int) -> list[tuple[int, in
         if owner == color:
             # a colour is always safe on its own start square
             continue
-        if nstar == color and color.value in active:
+        if nstar is not None and claim is not None and color.value == claim:
+            # All Stars: the claimer is safe on every neutral star
+            continue
+        if nstar == color and color.value in active and claim is None:
             # …and safe on its own neutral star once that colour has activated stars
             continue
         if state.eff("shield", seat) > 0:
@@ -261,6 +284,7 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
         if legal_moves(state):
             raise ValueError("cannot pass: legal moves exist")
         # A six still earns another roll even when it cannot be played — you keep the reward.
+        _consume_vertigo(state)
         extra = _six_pays_extra(state)
         _end_turn(state, extra_turn=extra)
         return ApplyResult(None, [], False, extra, state.phase is Phase.FINISHED)
@@ -291,6 +315,7 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
     # Reaching home no longer grants a bonus roll — the reward is a fantasy-card draw,
     # handled by the operational layer (see MatchRuntime), not the pure engine.
     extra_turn = _six_pays_extra(state) or bool(real_captures)
+    _consume_vertigo(state)
     _end_turn(state, extra_turn=extra_turn)
 
     return ApplyResult(
@@ -303,6 +328,12 @@ def apply_move(state: GameState, move: Move | None) -> ApplyResult:
 
 
 # --- turn machinery ---------------------------------------------------------
+def _consume_vertigo(state: GameState) -> None:
+    """A Vertigo charge covers exactly one roll, played or passed."""
+    if state.eff("vertigo", state.current) > 0:
+        state.add_eff("vertigo", state.current, -1)
+
+
 def _remaining_players(state: GameState) -> int:
     return sum(1 for p in state.players if not p.all_home())
 
