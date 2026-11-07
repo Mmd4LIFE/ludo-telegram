@@ -57,6 +57,27 @@ export interface Profile {
   is_admin: boolean;
   dice_skin: string;
   unlocked_skins?: string[];
+  level_progress?: LevelProgress;
+  xp_today?: number;
+  xp_daily_cap?: number;
+}
+
+export interface LevelProgress {
+  level: number;
+  xp: number;
+  into: number; // XP earned inside the current level
+  needed: number; // size of the current level (0 at max)
+  next_at: number | null;
+  max: boolean;
+}
+
+export interface LevelInfo {
+  progress: LevelProgress;
+  xp_today: number;
+  xp_daily_cap: number;
+  max_level: number;
+  roadmap: { level: number; xp: number; coins: number; milestone: boolean }[];
+  xp_sources: Record<string, number>;
 }
 
 export interface AdminUser {
@@ -361,6 +382,7 @@ export interface PlayerStats {
   id: number;
   first_name: string;
   level: number;
+  level_progress?: LevelProgress;
   games_played: number;
   games_won: number;
   dice: Record<string, number>; // {"1": n, ..., "6": n}
@@ -439,6 +461,7 @@ export async function authenticate(): Promise<Profile> {
 
 export const api = {
   me: () => req<Profile>("GET", "/api/profile/me"),
+  levels: () => req<LevelInfo>("GET", "/api/profile/levels"),
   setDiceSkin: (skin: string) => req<Profile>("POST", "/api/profile/dice-skin", { skin }),
   buyDiceSkin: (skin: string) =>
     req<Profile>("POST", "/api/profile/dice-skin/buy", { skin }),

@@ -24,8 +24,9 @@ TABLE_DOCS: dict[str, dict[str, str]] = {
         "language_code": "Telegram client language, e.g. 'en', 'fa', 'ru'.",
         "wallet_code": "Public UUID used for wallet-to-wallet transfers.",
         "coins": "Mirror of balances.amount (currency 'coins'). Prefer balances for economy math.",
-        "level": "Player level (progression).",
-        "xp": "Experience points (+100 per win, +25 per non-winning finished game).",
+        "level": "Player level 1..50, derived from xp by the level curve "
+                 "(xp needed for level n = round(100 * (n-1)^1.5)).",
+        "xp": "Lifetime experience points. Every grant is logged in xp_events.",
         "games_played": "Lifetime finished games counter (humans only).",
         "games_won": "Lifetime 1st-place finishes counter.",
         "dice_hist": "JSONB {\"1\": n, ..., \"6\": n}: lifetime count of each die face rolled.",
@@ -94,6 +95,22 @@ TABLE_DOCS: dict[str, dict[str, str]] = {
              "the player picked (picked = cards.id).",
         "options": "JSONB array of 4 cards.id strings offered.",
         "picked": "cards.id chosen.",
+    },
+    "xp_events": {
+        "_": "Append-only XP log: one row per grant. kind = 'placement' (end-of-game result, never "
+             "capped, at most once per user per match via ref = 'placement:<match_id>') or an action "
+             "kind 'knock' / 'home' / 'card' / 'couldve' (limited by the XP_DAILY_CAP per UTC day). "
+             "The same rows are copied to ClickHouse ludo.xp.",
+        "amount": "XP granted (after the daily cap and bot-table scaling).",
+        "match_id": "matches.id that earned it.",
+        "ref": "Idempotency key for once-only grants; NULL for action XP.",
+    },
+    "level_rewards": {
+        "_": "One row per (user, level) reached. coins is what was paid for that level-up "
+             "(also a balance_history row with reason 'level_up'). coins = 0 rows are levels "
+             "back-filled at launch from existing xp, which were not paid.",
+        "level": "Level reached.",
+        "coins": "Coins paid for reaching it.",
     },
     "balances": {
         "_": "Current coin balance per user — the source of truth for balances (users.coins mirrors "
@@ -236,7 +253,7 @@ meta->>'friend_id' / meta->>'referrer_id' hold users.id values.""",
         """Coins are a soft currency. balances.amount is the current balance; balance_history is the append-only ledger.
 Faucets (coins created, delta > 0): placement (finishing rewards), couldve (bonus for passed-up knocks),
 jackpot_card (card payout), insurance_payout, referral, signup, bot_start, admin_credit,
-stars_purchase (bought with Telegram Stars), opening_balance (ledger migration seed).
+level_up (once per level reached; meta->>'level'), stars_purchase (bought with Telegram Stars), opening_balance (ledger migration seed).
 Sinks (coins destroyed, delta < 0): entry_fee (room stake; the winner's pot credit is also reason 'entry_fee'
 with meta->>'kind' = 'pot_win'), reroll, hint, peek, insurance, buy_card, card_boost, skin_unlock, admin_debit.
 Transfers move coins between players: transfer_out (sender, also escrow when a gift link is created),

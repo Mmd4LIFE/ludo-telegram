@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import AnalyticsCursor, AnalyticsOutbox, DiceRoll, Knockout
+from app.models import AnalyticsCursor, AnalyticsOutbox, DiceRoll, Knockout, XpEvent
 
 logger = logging.getLogger("ludo.analytics")
 
@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS {db}.knocks (
     victim_user_id UInt64,
     victim_seat UInt8,
     taken UInt8,
+    created_at DateTime64(3) DEFAULT now64(3)
+) ENGINE = ReplacingMergeTree ORDER BY id;
+CREATE TABLE IF NOT EXISTS {db}.xp (
+    id UInt64,
+    match_id UInt64,
+    user_id UInt64,
+    kind LowCardinality(String),
+    amount Int32,
+    ref String,
     created_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplacingMergeTree ORDER BY id
 """
@@ -106,6 +115,22 @@ def queue_knocks(session: AsyncSession, rows: list[Knockout]) -> None:
     _queue(session, "knock", [(r.id, knock_payload(r)) for r in rows])
 
 
+def xp_payload(row: XpEvent) -> dict:
+    return {
+        "id": row.id,
+        "match_id": row.match_id or 0,
+        "user_id": row.user_id,
+        "kind": row.kind,
+        "amount": row.amount,
+        "ref": row.ref or "",
+        "created_at": ch_time(row.created_at),
+    }
+
+
+def queue_xp(session: AsyncSession, rows: list[XpEvent]) -> None:
+    _queue(session, "xp", [(r.id, xp_payload(r)) for r in rows])
+
+
 def _queue(session: AsyncSession, kind: str, items: list[tuple[int, dict]]) -> None:
     if not enabled() or not items:
         return
@@ -160,6 +185,7 @@ async def _loop() -> None:
                     await ensure_schema()
                 await _backfill("roll", DiceRoll, roll_payload)
                 await _backfill("knock", Knockout, knock_payload)
+                await _backfill("xp", XpEvent, xp_payload)
                 await _flush_batch()
         except asyncio.CancelledError:
             raise
@@ -243,9 +269,11 @@ async def _flush_batch() -> None:
 
     rolls = [payload for _id, kind, payload, _n in claimed if kind == "roll"]
     knocks = [payload for _id, kind, payload, _n in claimed if kind == "knock"]
+    xp_rows = [payload for _id, kind, payload, _n in claimed if kind == "xp"]
     try:
         await _insert("rolls", rolls)
         await _insert("knocks", knocks)
+        await _insert("xp", xp_rows)
     except Exception:
         await _reschedule(claimed)
         raise

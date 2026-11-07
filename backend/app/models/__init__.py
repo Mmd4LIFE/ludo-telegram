@@ -9,8 +9,10 @@ from app.models.config import AppConfig
 from app.models.insights import InsightsQuery, InsightsStep, InsightsKnowledge, InsightsSqlRun
 from app.models.ledger import Balance, BalanceHistory
 from app.models.wallet import Transfer, StarPayment, TransferStatus, StarPaymentStatus
+from app.models.leveling import LevelReward, XpEvent
 
 __all__ = [
+    "XpEvent", "LevelReward",
     "User", "Match", "MatchSeat", "MatchJoinRequest", "MatchStatus",
     "AnalyticsOutbox", "AnalyticsCursor",
     "ChatMessage", "MessageReaction", "ReactionEmoji",

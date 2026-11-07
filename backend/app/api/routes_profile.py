@@ -5,10 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.appconfig import current_values
 from app.database import get_session
 from app.models import User
 from app.schemas import BuyDiceSkinRequest, SetDiceSkinRequest, UserProfile
 from app.services import ledger
+from app.services import xp as xp_service
+from app.services.leveling import MAX_LEVEL, progress, roadmap
 from app.services.coin_features import DICE_SKIN_PRICES
 from app.services.ledger import InsufficientFunds
 
@@ -19,8 +22,38 @@ DICE_SKINS = set(DICE_SKIN_PRICES.keys())
 
 
 @router.get("/me", response_model=UserProfile)
-async def me(user: User = Depends(get_current_user)):
-    return UserProfile.from_user(user)
+async def me(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    cfg = await current_values(session)
+    out = UserProfile.from_user(user)
+    out.xp_today = await xp_service.action_xp_today(session, user.id)
+    out.xp_daily_cap = xp_service.daily_cap(cfg)
+    return out
+
+
+@router.get("/levels")
+async def levels(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Current progress, today's capped XP, and the next 10 levels with their coin rewards."""
+    cfg = await current_values(session)
+    return {
+        "progress": progress(user.xp or 0),
+        "xp_today": await xp_service.action_xp_today(session, user.id),
+        "xp_daily_cap": xp_service.daily_cap(cfg),
+        "max_level": MAX_LEVEL,
+        "roadmap": roadmap(user.xp or 0, 10, cfg),
+        "xp_sources": {
+            "place_1": cfg["XP_PLACE_1"], "place_2": cfg["XP_PLACE_2"],
+            "place_3": cfg["XP_PLACE_3"], "place_last": cfg["XP_PLACE_4"],
+            "knock": cfg["XP_KNOCK"], "home": cfg["XP_HOME"],
+            "card": cfg["XP_CARD"], "couldve": cfg["XP_COULDVE"],
+            "bot_table_pct": cfg["XP_BOT_TABLE_PCT"],
+        },
+    }
 
 
 @router.get("/dice-skins")

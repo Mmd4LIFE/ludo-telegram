@@ -35,12 +35,18 @@ class UserProfile(BaseModel):
     is_admin: bool = False
     dice_skin: str = "classic"
     unlocked_skins: list[str] = ["classic"]
+    # {level, xp, into, needed, next_at, max} from the XP curve
+    level_progress: dict = {}
+    # action XP earned today vs the daily cap (filled by /api/profile/me)
+    xp_today: int = 0
+    xp_daily_cap: int = 0
 
     @classmethod
     def from_user(cls, u) -> "UserProfile":
         from app.bot.instance import get_bot_username
         from app.config import settings
         from app.models.user import _new_wallet_code
+        from app.services.leveling import progress
 
         # Lazy-fill if an older row somehow missed the migration default.
         if not getattr(u, "wallet_code", None):
@@ -63,6 +69,7 @@ class UserProfile(BaseModel):
             is_admin=u.telegram_id in settings.admin_ids,
             dice_skin=getattr(u, "dice_skin", "classic") or "classic",
             unlocked_skins=skins,
+            level_progress=progress(u.xp or 0),
         )
 
 
@@ -209,9 +216,11 @@ class PlayerStats(BaseModel):
     captures_dealt: int         # times this player knocked someone home
     captures_taken: int         # times this player was knocked home
     potential_knocks: int       # captures this player could have made but didn't
+    level_progress: dict = {}
 
     @classmethod
     def from_user(cls, u) -> "PlayerStats":
+        from app.services.leveling import progress
         hist = {str(f): int((u.dice_hist or {}).get(str(f), 0)) for f in range(1, 7)}
         rolls = sum(hist.values())
         total = sum(f * n for f, n in ((int(k), v) for k, v in hist.items()))
@@ -227,6 +236,7 @@ class PlayerStats(BaseModel):
             captures_dealt=u.captures_dealt or 0,
             captures_taken=u.captures_taken or 0,
             potential_knocks=u.potential_knocks or 0,
+            level_progress=progress(u.xp or 0),
         )
 
 

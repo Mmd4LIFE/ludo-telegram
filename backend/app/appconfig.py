@@ -114,6 +114,43 @@ TUNABLE: dict[str, dict] = {
     "BOOST_TELEPORT_2": {"label": "Boost teleport 2 stars", "help": "", "default": 60, "min": 0, "max": 10000},
     "BOOST_SUMMON_2": {"label": "Boost summon 2", "help": "", "default": 80, "min": 0, "max": 10000},
     "BOOST_JACKPOT_250": {"label": "Boost jackpot 250", "help": "", "default": 50, "min": 0, "max": 10000},
+    # --- XP / levels -------------------------------------------------------
+    "XP_PLACE_1": {
+        "label": "XP: 1st place",
+        "help": "XP for winning (full 4-human table; fewer humans pay 67-83%).",
+        "default": 120, "min": 0, "max": 10000,
+    },
+    "XP_PLACE_2": {"label": "XP: 2nd place", "help": "XP for finishing 2nd.", "default": 80, "min": 0, "max": 10000},
+    "XP_PLACE_3": {"label": "XP: 3rd place", "help": "XP for finishing 3rd.", "default": 55, "min": 0, "max": 10000},
+    "XP_PLACE_4": {
+        "label": "XP: last place",
+        "help": "Completion XP for finishing last (never for leavers or kicked players).",
+        "default": 35, "min": 0, "max": 10000,
+    },
+    "XP_KNOCK": {"label": "XP per knock", "help": "Action XP for sending a rival home.", "default": 15, "min": 0, "max": 1000},
+    "XP_HOME": {"label": "XP per piece home", "help": "Action XP for bringing a piece home.", "default": 20, "min": 0, "max": 1000},
+    "XP_CARD": {"label": "XP per card played", "help": "Action XP for playing a fantasy card.", "default": 10, "min": 0, "max": 1000},
+    "XP_COULDVE": {"label": "XP per passed knock", "help": "Action XP for passing up a legal capture.", "default": 3, "min": 0, "max": 1000},
+    "XP_DAILY_CAP": {
+        "label": "Daily action XP cap",
+        "help": "Most action XP a player can earn per UTC day. Placement XP is never capped.",
+        "default": 600, "min": 0, "max": 100000,
+    },
+    "XP_BOT_TABLE_PCT": {
+        "label": "Bot table XP (%)",
+        "help": "Percent of normal XP earned in games against house bots.",
+        "default": 25, "min": 0, "max": 100,
+    },
+    "LEVEL_REWARD_BASE": {
+        "label": "Level-up coins (base)",
+        "help": "Coins for a level-up = base + step x level; every 5th level pays triple.",
+        "default": 50, "min": 0, "max": 100000,
+    },
+    "LEVEL_REWARD_STEP": {
+        "label": "Level-up coins (per level)",
+        "help": "Extra coins per level number added to the level-up reward.",
+        "default": 10, "min": 0, "max": 100000,
+    },
     # --- shop / Stars ------------------------------------------------------
     "COINS_PER_STAR": {
         "label": "Coins per Telegram Star",

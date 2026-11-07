@@ -27,3 +27,16 @@ CREATE TABLE IF NOT EXISTS ludo.knocks
 )
 ENGINE = ReplacingMergeTree
 ORDER BY id;
+
+CREATE TABLE IF NOT EXISTS ludo.xp
+(
+    id UInt64,
+    match_id UInt64,
+    user_id UInt64,
+    kind LowCardinality(String),
+    amount Int32,
+    ref String,
+    created_at DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree
+ORDER BY id;

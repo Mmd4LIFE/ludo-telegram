@@ -74,6 +74,9 @@ export interface StatePayload {
   seat_dealt: Record<string, number>; // this game: seat -> captures dealt
   seat_taken: Record<string, number>; // this game: seat -> captures suffered
   seat_potential: Record<string, number>; // this game: seat -> captures passed up
+  seat_xp?: Record<string, Record<string, number>>; // this game: seat -> {kind: xp granted}
+  seat_level_ups?: Record<string, number>; // seat -> levels gained this game
+  xp_capped_seats?: number[]; // seats whose action XP hit today's cap
   card: CardDraw | null; // in-progress fantasy-card draw
   removed_seats: number[];
   legal_moves: LegalMove[];

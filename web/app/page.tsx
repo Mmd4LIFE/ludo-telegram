@@ -77,6 +77,8 @@ import {
   PollTemplate,
   Profile,
   BalanceHistoryRow,
+  LevelInfo,
+  LevelProgress,
 } from "@/lib/api";
 import {
   getInitData,
@@ -114,7 +116,106 @@ type GameStats = {
   dealt: Record<string, number>; // seat -> captures dealt
   taken: Record<string, number>; // seat -> captures suffered
   potential: Record<string, number>; // seat -> captures passed up
+  xp?: Record<string, Record<string, number>>; // seat -> {kind: xp granted}
+  levelUps?: Record<string, number>; // seat -> levels gained this game
+  xpCapped?: number[]; // seats that hit today's action-XP cap
 };
+type LevelUp = { level: number; coins: number; levels: number[] };
+
+const XP_LABELS: Record<string, string> = {
+  placement: "Finish",
+  knock: "Knocks",
+  home: "Pieces home",
+  card: "Cards played",
+  couldve: "Passed knocks",
+};
+
+function levelPct(p?: LevelProgress): number {
+  if (!p) return 0;
+  if (p.max || p.needed <= 0) return 100;
+  return Math.min(100, Math.max(0, (p.into / p.needed) * 100));
+}
+
+function LevelBar({ progress, className }: { progress?: LevelProgress; className?: string }) {
+  return (
+    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-secondary", className)}>
+      <div
+        className="h-full rounded-full bg-gradient-to-r from-primary to-[#e58e26] transition-[width] duration-700"
+        style={{ width: `${levelPct(progress)}%` }}
+      />
+    </div>
+  );
+}
+
+function XpSummary({
+  xp,
+  capped,
+  profile,
+}: {
+  xp: Record<string, number>;
+  capped: boolean;
+  profile: Profile;
+}) {
+  const rows = Object.entries(xp).filter(([, n]) => n > 0);
+  const total = rows.reduce((s, [, n]) => s + n, 0);
+  const lp = profile.level_progress;
+  return (
+    <div className="mt-3 rounded-2xl bg-secondary/40 p-3 text-left">
+      <div className="flex items-center justify-between text-xs font-bold">
+        <span className="uppercase tracking-wider text-muted-foreground">XP earned</span>
+        <span className="text-primary tabular-nums">+{total.toLocaleString()}</span>
+      </div>
+      {rows.length > 0 && (
+        <div className="mt-1.5 flex flex-col gap-0.5">
+          {rows.map(([kind, n]) => (
+            <div key={kind} className="flex justify-between text-[11px] text-muted-foreground">
+              <span>{XP_LABELS[kind] ?? kind}</span>
+              <span className="tabular-nums">+{n}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {capped && (
+        <div className="mt-1.5 text-[10px] font-semibold text-[#e0a44a]">
+          Daily action XP cap reached. Finishing games still earns XP.
+        </div>
+      )}
+      <div className="mt-2 flex items-center justify-between text-[10px] font-semibold text-muted-foreground">
+        <span>LVL {profile.level}</span>
+        {lp && <span className="tabular-nums">{lp.max ? "MAX" : `${lp.into} / ${lp.needed}`}</span>}
+      </div>
+      <LevelBar progress={lp} className="mt-1" />
+    </div>
+  );
+}
+
+function LevelUpModal({ info, onClose }: { info: LevelUp; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-6 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div className="lb-pop w-full max-w-xs rounded-3xl bg-card p-6 text-center ring-1 ring-primary/40">
+        <div className="mx-auto grid size-16 place-items-center rounded-full bg-primary/20">
+          <Trophy className="size-8 text-primary" />
+        </div>
+        <div className="mt-3 text-xs font-bold uppercase tracking-widest text-primary">Level up</div>
+        <div className="mt-1 text-3xl font-extrabold">Level {info.level}</div>
+        {info.levels.length > 1 && (
+          <div className="mt-1 text-xs text-muted-foreground">+{info.levels.length} levels at once</div>
+        )}
+        {info.coins > 0 && (
+          <div className="mx-auto mt-4 inline-flex items-center gap-1.5 rounded-full bg-secondary px-4 py-1.5 text-sm font-bold ring-1 ring-white/10">
+            <Coins className="size-4 text-primary" />+{info.coins.toLocaleString()} coins
+          </div>
+        )}
+        <Button className="mt-5 w-full" onClick={onClose}>
+          Nice
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 // Catch any render error so a single bad frame can never take down the whole webview
 // (which Telegram surfaces as "This page couldn't load").
@@ -194,6 +295,10 @@ function Home() {
   const leaveMatchRef = useRef<(() => void) | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [joinPulse, setJoinPulse] = useState(0);
+  const [levelUp, setLevelUp] = useState<LevelUp | null>(null);
+  const refreshProfile = useCallback(() => {
+    api.me().then(setProfile).catch(() => {});
+  }, []);
 
   // ---- live match socket ----
   const enterMatch = useCallback((code: string) => {
@@ -218,6 +323,9 @@ function Home() {
           dealt: p.seat_dealt ?? {},
           taken: p.seat_taken ?? {},
           potential: p.seat_potential ?? {},
+          xp: p.seat_xp ?? {},
+          levelUps: p.seat_level_ups ?? {},
+          xpCapped: p.xp_capped_seats ?? [],
         });
         setCardDraw(p.card ?? null);
         setRemovedSeats(p.removed_seats ?? []);
@@ -258,6 +366,16 @@ function Home() {
         }
       } else if (msg.type === "join_requests") {
         setJoinPulse((n) => n + 1);
+      } else if (msg.type === "level_up") {
+        if (msg.user_id === myIdRef.current) {
+          notify("success");
+          setLevelUp({
+            level: Number(msg.level),
+            coins: Number(msg.coins ?? 0),
+            levels: (msg.levels as number[]) ?? [],
+          });
+          api.me().then(setProfile).catch(() => {});
+        }
       } else if (msg.type === "kicked") {
         if (msg.user_id === myIdRef.current) {
           notify("warning");
@@ -276,7 +394,16 @@ function Home() {
     setMatchCode("");
     setState(null);
     setRoom(null);
+    api.me().then(setProfile).catch(() => {});
   }, []);
+
+  // the final XP / coins land at settle — pull the fresh profile once the game ends
+  const finishedNow = state?.phase === "finished";
+  useEffect(() => {
+    if (!finishedNow) return;
+    const id = setTimeout(refreshProfile, 1500);
+    return () => clearTimeout(id);
+  }, [finishedNow, refreshProfile]);
   leaveMatchRef.current = leaveMatch;
 
   // ---- auth + deep-link ----
@@ -378,11 +505,13 @@ function Home() {
   if (!profile) return <Splash />;
 
   const noticeBanner = notice ? <NoticeBanner text={notice} onClose={() => setNotice(null)} /> : null;
+  const levelModal = levelUp ? <LevelUpModal info={levelUp} onClose={() => setLevelUp(null)} /> : null;
 
   if (showAdmin) return <AdminPanel onBack={() => setShowAdmin(false)} />;
 
   if (matchCode && state)
     return (
+      <>
       <LiveMatch
         code={matchCode}
         state={state}
@@ -410,6 +539,8 @@ function Home() {
         joinPulse={joinPulse}
         onLeave={leaveMatch}
       />
+      {levelModal}
+      </>
     );
 
   if (matchCode && !state) return <Splash label="Joining game…" />;
@@ -448,6 +579,7 @@ function Home() {
       {view === "cards" && <CardsGallery />}
       <BottomNav view={view} onChange={setView} />
       {noticeBanner}
+      {levelModal}
     </>
   );
 }
@@ -497,7 +629,7 @@ function Splash({ label = "Loading…" }: { label?: string }) {
 
 function WalletBar({ profile }: { profile: Profile }) {
   const initial = (profile.first_name || "P").slice(0, 1).toUpperCase();
-  const xpPct = Math.min(100, ((profile.xp % 500) / 500) * 100);
+  const lp = profile.level_progress;
   return (
     <div className="flex items-center gap-3">
       <div className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-secondary to-card text-lg font-bold ring-1 ring-white/10">
@@ -509,13 +641,13 @@ function WalletBar({ profile }: { profile: Profile }) {
           <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
             LVL {profile.level}
           </span>
+          {lp && (
+            <span className="ml-auto text-[10px] font-semibold tabular-nums text-muted-foreground">
+              {lp.max ? "MAX" : `${lp.into.toLocaleString()} / ${lp.needed.toLocaleString()} XP`}
+            </span>
+          )}
         </div>
-        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-primary to-[#e58e26]"
-            style={{ width: `${xpPct}%` }}
-          />
-        </div>
+        <LevelBar progress={lp} className="mt-1" />
       </div>
       <div className="flex items-center gap-1.5 rounded-2xl bg-secondary px-3 py-2 ring-1 ring-white/10">
         <Coins className="size-4 text-primary" />
@@ -1863,7 +1995,10 @@ function LiveMatch({
           <Trophy className="mx-auto size-8 text-primary" />
           <div className="mt-1 text-lg font-extrabold">{nameFor(state.ranking[0])} won!</div>
           <div className="mt-3 flex flex-col gap-1.5">
-            {state.ranking.map((seat, i) => (
+            {state.ranking.map((seat, i) => {
+              const gained = Object.values(gameStats.xp?.[String(seat)] ?? {}).reduce((a, n) => a + n, 0);
+              const ups = gameStats.levelUps?.[String(seat)] ?? 0;
+              return (
               <div
                 key={seat}
                 className="flex items-center gap-2.5 rounded-xl bg-secondary/60 px-3 py-1.5 text-sm"
@@ -1871,9 +2006,25 @@ function LiveMatch({
                 <span className="w-4 text-center font-bold text-muted-foreground">{i + 1}</span>
                 <span className="size-3 shrink-0 rounded-full" style={{ background: COLOR_HEX[state.players[seat].color] }} />
                 <span className="flex-1 truncate text-left font-semibold">{nameFor(seat)}</span>
+                <span className="shrink-0 text-right text-[11px] font-bold leading-tight text-muted-foreground">
+                  <span className="block text-foreground">LVL {seatLevels[String(seat)] ?? 1}</span>
+                  {(gained > 0 || ups > 0) && (
+                    <span className="block text-primary">
+                      +{gained} XP{ups ? ` · +${ups} ${ups === 1 ? "level" : "levels"}` : ""}
+                    </span>
+                  )}
+                </span>
               </div>
-            ))}
+              );
+            })}
           </div>
+          {mySeat !== null && (
+            <XpSummary
+              xp={gameStats.xp?.[String(mySeat)] ?? {}}
+              capped={(gameStats.xpCapped ?? []).includes(mySeat)}
+              profile={profile}
+            />
+          )}
           <div className="mt-4 grid grid-cols-2 gap-2">
             <Button
               variant="win"
@@ -2902,6 +3053,7 @@ function ProfileSheet({ userId, onClose }: { userId: number; onClose: () => void
                 <div className="text-xs text-muted-foreground">
                   Level {stats.level} · {stats.games_won}/{stats.games_played} wins
                 </div>
+                <LevelBar progress={stats.level_progress} className="mt-1.5" />
               </div>
             </div>
 
@@ -4265,6 +4417,74 @@ function DieFace({ value, skin, size }: { value: number; skin: string; size: num
   );
 }
 
+function LevelRoadmap({ profile }: { profile: Profile }) {
+  const [info, setInfo] = useState<LevelInfo | null>(null);
+  useEffect(() => {
+    api.levels().then(setInfo).catch(() => {});
+  }, [profile.xp]);
+  const lp = info?.progress ?? profile.level_progress;
+  const today = info?.xp_today ?? profile.xp_today ?? 0;
+  const cap = info?.xp_daily_cap ?? profile.xp_daily_cap ?? 0;
+  const src = info?.xp_sources;
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <SectionLabel>Level {profile.level}</SectionLabel>
+        {lp && (
+          <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">
+            {lp.max ? "Max level" : `${lp.into.toLocaleString()} / ${lp.needed.toLocaleString()} XP`}
+          </span>
+        )}
+      </div>
+      <LevelBar progress={lp} className="mt-2 h-2" />
+      {cap > 0 && (
+        <div className="mt-3">
+          <div className="flex justify-between text-[10px] font-semibold text-muted-foreground">
+            <span>Action XP today</span>
+            <span className="tabular-nums">
+              {today.toLocaleString()} / {cap.toLocaleString()}
+            </span>
+          </div>
+          <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-[#e0a44a]"
+              style={{ width: `${Math.min(100, (today / cap) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {src && (
+        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+          Win +{src.place_1}, finish +{src.place_last} to +{src.place_2} XP. Knock +{src.knock}, piece home +
+          {src.home}, card +{src.card}. Bot games earn {src.bot_table_pct}%.
+        </p>
+      )}
+      {(info?.roadmap.length ?? 0) > 0 && (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {info!.roadmap.slice(0, 5).map((r) => (
+            <div
+              key={r.level}
+              className={cn(
+                "flex items-center gap-3 rounded-xl px-3 py-2 text-sm",
+                r.milestone ? "bg-primary/15 ring-1 ring-primary/30" : "bg-secondary/50"
+              )}
+            >
+              <span className="w-14 font-bold">LVL {r.level}</span>
+              <span className="flex-1 text-[11px] tabular-nums text-muted-foreground">
+                {r.xp.toLocaleString()} XP
+              </span>
+              <span className="inline-flex items-center gap-1 text-xs font-bold">
+                <Coins className="size-3.5 text-primary" />
+                {r.coins.toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function MeScreen({
   profile,
   onAdmin,
@@ -4330,6 +4550,8 @@ function MeScreen({
           </div>
         ))}
       </div>
+
+      <LevelRoadmap profile={profile} />
 
       <Card>
         <SectionLabel>Your dice</SectionLabel>

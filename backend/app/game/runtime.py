@@ -58,6 +58,7 @@ from app.services.coin_features import (
     boost_params,
 )
 from app.services.ledger import InsufficientFunds, placement_payout
+from app.services import xp as xp_service
 from sqlalchemy import insert, select, update
 from app.analytics import clickhouse as analytics
 
@@ -144,6 +145,13 @@ class MatchRuntime:
         self._rerolled_this_turn = False
         self._insured: set[int] = set()  # user_ids with active knock insurance
         self._hint_token: int | None = None  # recommended token_index this move
+        # action XP waiting to be awarded on the next persist: uid -> {kind: base amount}
+        self.stat_xp: dict[int, dict[str, int]] = {}
+        # XP actually granted this game (after cap / bot-table scaling): uid -> {kind: xp}
+        self.game_xp: dict[int, dict[str, int]] = {}
+        self.game_levels: dict[int, int] = {}  # uid -> levels gained this game
+        self.xp_capped: set[int] = set()   # uids whose action XP hit today's cap
+        self._level_ups: list[dict] = []   # announced after the awarding commit
 
     # ---- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -653,6 +661,7 @@ class MatchRuntime:
                 self.game_dealt[seat] = self.game_dealt.get(seat, 0) + len(res.captured)
                 if mover is not None:
                     self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + len(res.captured)
+                    self._note_xp(mover, "knock", len(res.captured))
                 for cseat, _tok in res.captured:
                     self.game_taken[cseat] = self.game_taken.get(cseat, 0) + 1
                     victim = self._human_uid(cseat)
@@ -677,6 +686,7 @@ class MatchRuntime:
                 n = len(targets)
                 self.game_potential[seat] = self.game_potential.get(seat, 0) + n
                 self.stat_potential[mover] = self.stat_potential.get(mover, 0) + n
+                self._note_xp(mover, "couldve", n)
                 pay = max(0, int(self.cfg.get("PAY_COULDVE", 10))) * n
                 if pay:
                     self.stat_couldve_coins[mover] = self.stat_couldve_coins.get(mover, 0) + pay
@@ -692,6 +702,8 @@ class MatchRuntime:
                 if due > self.pot_reward.get(seat, 0):
                     self.pot_reward[seat] = due
                     couldve_due = True
+            if res.reached_home and mover is not None:
+                self._note_xp(mover, "home")
             await self._broadcast()
             await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
@@ -856,6 +868,7 @@ class MatchRuntime:
         await asyncio.sleep(settings.CARD_RESULT_DELAY)
 
         affected = self._apply_card(seat, effect, target, params, kicked)
+        self._note_xp(uid, "card")
         self.buf_cards.append({
             "match_id": self.match_id, "user_id": uid, "seat": seat,
             "options": options, "picked": picked, "turn": turn_no,
@@ -1027,6 +1040,7 @@ class MatchRuntime:
         mover = self._human_uid(seat)
         if mover is not None:
             self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + 1
+            self._note_xp(mover, "knock")
         self.game_taken[rival] = self.game_taken.get(rival, 0) + 1
         victim = self._human_uid(rival)
         if victim is not None:
@@ -1073,6 +1087,7 @@ class MatchRuntime:
             mover = self._human_uid(seat)
             if mover is not None:
                 self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + 1
+                self._note_xp(mover, "knock")
             self.game_taken[vseat] = self.game_taken.get(vseat, 0) + 1
             vuid = self._human_uid(vseat)
             if vuid is not None:
@@ -1158,6 +1173,19 @@ class MatchRuntime:
             "seat_dealt": {str(k): v for k, v in self.game_dealt.items()},
             "seat_taken": {str(k): v for k, v in self.game_taken.items()},
             "seat_potential": {str(k): v for k, v in self.game_potential.items()},
+            # XP granted this game per seat ({kind: xp}) and seats that hit today's cap
+            "seat_xp": {
+                str(s): dict(self.game_xp[uid])
+                for s, uid in self.seat_user.items() if uid in self.game_xp
+            },
+            "seat_level_ups": {
+                str(s): n
+                for s, uid in self.seat_user.items()
+                if (n := self.game_levels.get(uid, 0))
+            },
+            "xp_capped_seats": sorted(
+                s for s, uid in self.seat_user.items() if uid in self.xp_capped
+            ),
             "card": self._card,   # in-progress fantasy-card draw (None when idle)
             "removed_seats": sorted(self.removed_seats),
             "legal_moves": [m.to_dict() for m in legal_moves(self.state)],
@@ -1223,6 +1251,7 @@ class MatchRuntime:
             self.buf_knocks = []
         self._steps_since_persist = 0
         self._persist_dirty = False
+        await self._announce_level_ups()
 
     async def _expire_pending(self, session) -> None:
         now = datetime.now(timezone.utc)
@@ -1266,6 +1295,7 @@ class MatchRuntime:
             await self._flush_stats(session)
             await self._expire_pending(session)
             await session.commit()
+        await self._announce_level_ups()
         logger.info("match %s abandoned (no viewers)", self.code)
 
     async def claim_rematch(self, user_id: int, create) -> tuple[str | None, list[int], list[int]]:
@@ -1286,6 +1316,79 @@ class MatchRuntime:
                 return self.rematch_code, votes, human_ids
             return None, votes, human_ids
 
+    # ---- XP / levels ------------------------------------------------------
+    _XP_KEYS = {"knock": "XP_KNOCK", "home": "XP_HOME", "card": "XP_CARD", "couldve": "XP_COULDVE"}
+
+    def _note_xp(self, uid: int | None, kind: str, times: int = 1) -> None:
+        """Queue action XP for a human; awarded (capped) on the next persist."""
+        if uid is None or times <= 0:
+            return
+        per = int(self.cfg.get(self._XP_KEYS[kind], 0))
+        if per <= 0:
+            return
+        bucket = self.stat_xp.setdefault(uid, {})
+        bucket[kind] = bucket.get(kind, 0) + per * times
+
+    def _xp_scaled(self, amount: int) -> int:
+        """Bot tables earn a fraction of normal XP."""
+        if not self.is_bot_table:
+            return amount
+        return amount * max(0, int(self.cfg.get("XP_BOT_TABLE_PCT", 25))) // 100
+
+    def _record_award(self, uid: int, kind: str, res) -> None:
+        if res.gained:
+            bucket = self.game_xp.setdefault(uid, {})
+            bucket[kind] = bucket.get(kind, 0) + res.gained
+        if res.levels:
+            self.game_levels[uid] = self.game_levels.get(uid, 0) + len(res.levels)
+        if res.capped:
+            self.xp_capped.add(uid)
+        if res.leveled_up:
+            self._level_ups.append({
+                "user_id": uid, "level": res.level_after, "coins": res.coins,
+                "levels": list(res.levels),
+            })
+
+    async def _flush_xp(self, session) -> None:
+        pending, self.stat_xp = self.stat_xp, {}
+        for uid, kinds in pending.items():
+            for kind, amount in kinds.items():
+                scaled = self._xp_scaled(amount)
+                if scaled <= 0:
+                    continue
+                res = await xp_service.award(
+                    session, uid, scaled, kind, match_id=self.match_id, cfg=self.cfg
+                )
+                self._record_award(uid, kind, res)
+
+    async def _announce_level_ups(self) -> None:
+        """After the awarding commit: refresh board badges and tell clients."""
+        if not self._level_ups:
+            return
+        notes, self._level_ups = self._level_ups, []
+        for note in notes:
+            for seat, uid in self.seat_user.items():
+                if uid == note["user_id"]:
+                    self.seat_levels[seat] = note["level"]
+            await hub.broadcast(self.code, {"type": "level_up", **note})
+        await self._broadcast()
+
+    def placement_xp(self, place: int, human_count: int, seats: int) -> int:
+        """XP for finishing at ``place``. Last place gets the completion amount; fuller
+        human tables pay more (2 humans 67%, 3 humans 83%, 4 humans 100%)."""
+        if place < 1:
+            return 0
+        if place == 1:
+            key = "XP_PLACE_1"
+        elif place >= seats:
+            key = "XP_PLACE_4"
+        else:
+            key = f"XP_PLACE_{min(place, 3)}"
+        base = int(self.cfg.get(key, 0))
+        humans = max(1, min(4, human_count))
+        scale = (humans + 2) / 6 if humans >= 2 else 1.0
+        return self._xp_scaled(round(base * scale))
+
     async def _flush_stats(self, session) -> None:
         """Fold the dice + capture deltas accumulated SINCE THE LAST FLUSH into each
         human's lifetime totals, then clear them. Called from _persist after every step
@@ -1295,6 +1398,7 @@ class MatchRuntime:
         ``dice_hist`` is JSONB keyed by the string faces "1".."6"; we reassign the dict so
         SQLAlchemy detects the change (in-place JSONB mutation isn't tracked).
         """
+        await self._flush_xp(session)
         uids = (
             set(self.stat_dice) | set(self.stat_dealt) | set(self.stat_taken)
             | set(self.stat_potential) | set(self.stat_coins)
@@ -1380,9 +1484,15 @@ class MatchRuntime:
                 if user is None:
                     continue
                 user.games_played += 1
+                if uid not in self.kicked and seat not in self.removed_seats:
+                    gain = self.placement_xp(place, human_count, len(self.state.ranking))
+                    res = await xp_service.award(
+                        session, uid, gain, xp_service.PLACEMENT,
+                        match_id=self.match_id, ref=f"placement:{self.match_id}", cfg=self.cfg,
+                    )
+                    self._record_award(uid, xp_service.PLACEMENT, res)
                 if place == 1:
                     user.games_won += 1
-                    user.xp += 100
                     if pot:
                         await ledger.credit(
                             session,
@@ -1393,8 +1503,6 @@ class MatchRuntime:
                             ref_id=self.match_id,
                             meta={"kind": "pot_win"},
                         )
-                else:
-                    user.xp += 25
                 pay = placement_payout(self.cfg, place, human_count)
                 if pay:
                     await ledger.credit(
@@ -1406,6 +1514,8 @@ class MatchRuntime:
                         ref_id=self.match_id,
                         meta={"place": place, "humans": human_count},
                     )
+            await self._flush_stats(session)
             await self._expire_pending(session)
             await session.commit()
+        await self._announce_level_ups()
         logger.info("match %s finished, ranking=%s", self.code, self.state.ranking)
