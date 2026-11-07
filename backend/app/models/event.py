@@ -66,6 +66,34 @@ class Card(Base):
     description: Mapped[str] = mapped_column(String(200), default="")
     position: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Fantasy Arena: mana to cast (defaulted by rarity) and whether the card is
+    # arena-only (never offered in a classic draw).
+    cost: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    fantasy_only: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
+
+class CardPlay(Base):
+    """One Fantasy Arena cast: who played which card, what it cost, whom it hit."""
+
+    __tablename__ = "card_plays"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    match_id: Mapped[int] = mapped_column(
+        ForeignKey("matches.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, default=None
+    )
+    seat: Mapped[int] = mapped_column(Integer)
+    card_id: Mapped[str] = mapped_column(String(32))
+    cost: Mapped[int] = mapped_column(Integer, default=0)
+    turn: Mapped[int] = mapped_column(Integer, default=0)
+    target_seat: Mapped[int | None] = mapped_column(Integer, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class CardDraw(Base):

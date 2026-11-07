@@ -8,6 +8,8 @@ ensure the match runtime is running, and push the current state. The client then
     {"type": "ping"}                      -> keep-alive, replied with {"type":"pong"}
     {"type": "sync"}                      -> request a fresh state snapshot
     {"type": "emote", "emote": "fire"}    -> broadcast a reaction
+    {"type": "cast_card", "card_id": "shield", "seat"?: 2, "token"?: 1}
+                                          -> Fantasy Arena: cast from your hand (ROLL phase)
 
 All game rules are enforced server-side by the runtime + pure engine; the client is a
 renderer. A stale or out-of-turn action is simply ignored.
@@ -97,6 +99,7 @@ async def match_ws(websocket: WebSocket, code: str, token: str = Query(...)):
             if mtype in (
                 "roll", "move", "reroll", "pick_card", "pick_target",
                 "peek", "boost_card", "skip_boost", "insurance", "hint", "buy_card",
+                "cast_card",   # Fantasy Arena: play a card from your hand before rolling
             ):
                 manager.handle_action(match_id, user_id, data)
             elif mtype == "ping":

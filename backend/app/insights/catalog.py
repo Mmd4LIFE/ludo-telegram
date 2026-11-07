@@ -29,6 +29,8 @@ TABLE_DOCS: dict[str, dict[str, str]] = {
         "xp": "Lifetime experience points. Every grant is logged in xp_events.",
         "games_played": "Lifetime finished games counter (humans only).",
         "games_won": "Lifetime 1st-place finishes counter.",
+        "fantasy_played": "Lifetime finished Fantasy Arena games (humans only).",
+        "fantasy_wins": "Lifetime 1st-place finishes in Fantasy Arena.",
         "dice_hist": "JSONB {\"1\": n, ..., \"6\": n}: lifetime count of each die face rolled.",
         "captures_dealt": "Lifetime knockouts this player made (sent an opponent token home).",
         "captures_taken": "Lifetime times this player's tokens were knocked home.",
@@ -51,6 +53,7 @@ TABLE_DOCS: dict[str, dict[str, str]] = {
         "max_players": "Seats in the room, 2..4.",
         "is_public": "Listed in the public lobby.",
         "is_bot_table": "Self-play bot table (lobby filler). Exclude by default.",
+        "mode": "'classic' (default Ludo) or 'fantasy' (Fantasy Arena: drafted hands, mana, realm events). Filter with matches.mode.",
         "entry_fee": "Coins staked per human seat (0 = free room).",
         "created_by": "users.id of the room creator (NULL for bot tables).",
         "state": "JSONB snapshot of the game engine state (players, ranking, turn, die …). "
@@ -66,6 +69,7 @@ TABLE_DOCS: dict[str, dict[str, str]] = {
         "is_bot": "True for a house-bot seat.",
         "connected": "Live connection flag (only meaningful for live matches).",
         "place": "Final placement 1..N for finished matches, NULL otherwise.",
+        "champion": "Fantasy Arena champion id: 'knight', 'rogue', 'sage' or 'trickster'. NULL in classic rooms.",
     },
     "dice_rolls": {
         "_": "Append-only log of every die roll by a human (bots are not logged). "
@@ -87,8 +91,19 @@ TABLE_DOCS: dict[str, dict[str, str]] = {
         "id": "Card id (string, e.g. 'twin_dice'). card_draws.picked references it.",
         "effect": "Engine effect key.",
         "status": "'live' (in the game) or 'soon' (teaser).",
-        "rarity": "common/rare/epic/legendary …",
+        "rarity": "common/uncommon/rare/epic.",
         "enabled": "Admin toggle.",
+        "cost": "Fantasy Arena mana cost to cast (defaulted by rarity).",
+        "fantasy_only": "True for arena-only cards (Mana Surge, Pickpocket, Hex, Time Warp); they never appear in a classic draw.",
+    },
+    "card_plays": {
+        "_": "Every Fantasy Arena cast: who played which card, the mana paid, and the seat it hit. "
+             "Classic card draws (home/could've prizes) live in card_draws, not here.",
+        "card_id": "cards.id that was cast.",
+        "cost": "Mana spent on this cast (after Trickster discount).",
+        "turn": "Engine turn number when it was cast.",
+        "target_seat": "Seat the effect landed on, NULL for untargeted cards.",
+        "seat": "Caster's seat index.",
     },
     "card_draws": {
         "_": "Every fantasy-card draw: the 4 card ids offered (options JSONB array) and the one "
@@ -99,7 +114,7 @@ TABLE_DOCS: dict[str, dict[str, str]] = {
     "xp_events": {
         "_": "Append-only XP log: one row per grant. kind = 'placement' (end-of-game result, never "
              "capped, at most once per user per match via ref = 'placement:<match_id>') or an action "
-             "kind 'knock' / 'home' / 'card' / 'couldve' (limited by the XP_DAILY_CAP per UTC day). "
+             "kind 'knock' / 'home' / 'card' / 'couldve' / 'cast' (limited by the XP_DAILY_CAP per UTC day). "
              "The same rows are copied to ClickHouse ludo.xp.",
         "amount": "XP granted (after the daily cap and bot-table scaling).",
         "match_id": "matches.id that earned it.",
@@ -243,6 +258,9 @@ meta->>'friend_id' / meta->>'referrer_id' hold users.id values.""",
   COUNT(*) FROM match_seats s JOIN matches m ON m.id = s.match_id WHERE s.user_id = X AND s.place = 1
   AND m.status = 'finished' AND m.updated_at in the period (updated_at ≈ finish time).
 - users.games_won / games_played are lifetime counters (fine for all-time questions).
+- matches.mode is 'classic' or 'fantasy'. Fantasy Arena wins = match_seats.place = 1 AND matches.mode = 'fantasy'.
+  users.fantasy_played / fantasy_wins are the matching lifetime counters.
+- Champions live on match_seats.champion ('knight'/'rogue'/'sage'/'trickster').
 - Win rate = wins / finished games played (from match_seats + matches) — guard division by zero with NULLIF.
 - Match duration ≈ matches.updated_at - matches.created_at for finished matches.
 - Players per match = COUNT(match_seats) WHERE user_id IS NOT NULL.""",
@@ -275,8 +293,10 @@ Pending rows are invoices that were opened but not paid.""",
         """- dice_rolls: every human roll (value 1..6). Sixes = value = 6. Average roll = AVG(value).
 - knockouts: taken = true is a real capture ("knock"), taken = false a missed opportunity.
   Knocks by a player = COUNT(*) WHERE attacker_user_id = X AND taken. Times knocked = victim_user_id = X AND taken.
-- card_draws: a fantasy-card draw; picked is the chosen cards.id. Popularity = COUNT(*) GROUP BY picked.
+- card_draws: a classic-mode prize draw; picked is the chosen cards.id. Popularity = COUNT(*) GROUP BY picked.
   Join cards ON cards.id = card_draws.picked for names.
+- card_plays: a Fantasy Arena cast. Most-cast card = COUNT(*) GROUP BY card_id. Filter matches.mode = 'fantasy'
+  when comparing arena vs classic. XP kind 'cast' is +5 per card (XP_CAST).
 - Power-up spending lives in balance_history: reroll, hint, peek, insurance, buy_card, card_boost.""",
     ),
     (

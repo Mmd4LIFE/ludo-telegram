@@ -26,8 +26,15 @@ class Phase(str, Enum):
 #   second_chance seat -> 1 while a one-shot "don't get knocked home" is armed
 #   toll          seat -> rounds its neutral star blocks rivals from landing on it
 #   vertigo       seat -> upcoming rolls that step backward instead of forward
+#   hex           seat -> upcoming rolls capped at 3 (Fantasy Arena "Hex")
 # double_mult: Twin Dice movement multiplier (2/3/4) while ``double`` charges remain
-_EFFECT_KEYS = ("shield", "double", "double_mult", "skip", "second_chance", "toll", "vertigo")
+_EFFECT_KEYS = (
+    "shield", "double", "double_mult", "skip", "second_chance", "toll", "vertigo", "hex",
+)
+
+# Fantasy Arena per-seat maps inside ``GameState.fantasy`` whose keys are seats (ints).
+# JSON forces string keys, so to_dict/from_dict convert these back and forth.
+_FANTASY_SEAT_MAPS = ("mana", "hand", "turns", "champion", "casts", "draft_options")
 
 
 def _default_effects() -> dict[str, dict[int, int]]:
@@ -100,6 +107,13 @@ class GameState:
     roll_face: int | None = None
     # fantasy-card buffs (see _default_effects)
     effects: dict[str, dict[int, int]] = field(default_factory=_default_effects)
+    # Fantasy Arena state (None in a classic game). Shape, see app.game.fantasy:
+    #   {mana: {seat: int}, hand: {seat: [card_id]}, turns: {seat: own turns taken},
+    #    champion: {seat: id}, casts: {seat: n}, cast_log: {card_id: n},
+    #    event: {id, until_turn} | None, next_event_turn: int,
+    #    cast_this_turn: [turn, seat] | None, time_warp: seat | None,
+    #    draft: {round, done: bool} | None, draft_options: {seat: [card_id]}}
+    fantasy: dict | None = None
 
     # ---- convenience ------------------------------------------------------
     @property
@@ -127,8 +141,28 @@ class GameState:
     def add_eff(self, key: str, seat: int, delta: int) -> None:
         self.set_eff(key, seat, self.eff(key, seat) + delta)
 
+    # ---- Fantasy Arena helpers --------------------------------------------
+    @property
+    def realm_event(self) -> str | None:
+        """Id of the realm event in force right now (fantasy mode only), else None."""
+        if not self.fantasy:
+            return None
+        ev = self.fantasy.get("event")
+        if not ev:
+            return None
+        if self.turn >= int(ev.get("until_turn", 0)):
+            return None
+        return ev.get("id")
+
     def to_dict(self) -> dict:
+        fantasy = None
+        if self.fantasy is not None:
+            fantasy = dict(self.fantasy)
+            for key in _FANTASY_SEAT_MAPS:
+                if isinstance(fantasy.get(key), dict):
+                    fantasy[key] = {str(s): v for s, v in fantasy[key].items()}
         return {
+            "fantasy": fantasy,
             "players": [p.to_dict() for p in self.players],
             "current": self.current,
             "phase": self.phase.value,
@@ -156,7 +190,14 @@ class GameState:
             )
             for p in d["players"]
         ]
+        fantasy = d.get("fantasy")
+        if fantasy is not None:
+            fantasy = dict(fantasy)
+            for key in _FANTASY_SEAT_MAPS:
+                if isinstance(fantasy.get(key), dict):
+                    fantasy[key] = {int(s): v for s, v in fantasy[key].items()}
         return cls(
+            fantasy=fantasy,
             players=players,
             current=d.get("current", 0),
             phase=Phase(d.get("phase", "roll")),

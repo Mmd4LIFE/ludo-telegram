@@ -131,6 +131,7 @@ TUNABLE: dict[str, dict] = {
     "XP_HOME": {"label": "XP per piece home", "help": "Action XP for bringing a piece home.", "default": 20, "min": 0, "max": 1000},
     "XP_CARD": {"label": "XP per card played", "help": "Action XP for playing a fantasy card.", "default": 10, "min": 0, "max": 1000},
     "XP_COULDVE": {"label": "XP per passed knock", "help": "Action XP for passing up a legal capture.", "default": 3, "min": 0, "max": 1000},
+    "XP_CAST": {"label": "XP per card cast", "help": "Fantasy Arena: action XP for casting a card from your hand.", "default": 5, "min": 0, "max": 1000},
     "XP_DAILY_CAP": {
         "label": "Daily action XP cap",
         "help": "Most action XP a player can earn per UTC day. Placement XP is never capped.",
@@ -151,6 +152,31 @@ TUNABLE: dict[str, dict] = {
         "help": "Extra coins per level number added to the level-up reward.",
         "default": 10, "min": 0, "max": 100000,
     },
+    # --- Fantasy Arena -----------------------------------------------------
+    "FANTASY_MANA_MAX": {
+        "label": "Arena: max mana",
+        "help": "Mana pool ceiling. +1 per own turn, +1 per capture, +2 per piece home.",
+        "default": 10, "min": 1, "max": 50,
+    },
+    "FANTASY_HAND_MAX": {
+        "label": "Arena: hand size",
+        "help": "Most cards a player can hold; a full hand discards its oldest card.",
+        "default": 5, "min": 1, "max": 10,
+    },
+    "FANTASY_DRAW_EVERY": {
+        "label": "Arena: draw every N turns",
+        "help": "A card is drawn at the start of every Nth own turn (Sage: every 2nd).",
+        "default": 3, "min": 1, "max": 10,
+    },
+    "FANTASY_EVENT_EVERY": {
+        "label": "Arena: realm event every N turns",
+        "help": "A realm event (Eclipse, Tailwind, Fog, Harvest, Quake) fires every N global turns. 0 disables.",
+        "default": 8, "min": 0, "max": 100,
+    },
+    "FANTASY_COST_COMMON": {"label": "Arena: common card cost", "help": "Mana to cast a common card (when the card has no cost of its own).", "default": 1, "min": 0, "max": 20},
+    "FANTASY_COST_UNCOMMON": {"label": "Arena: uncommon card cost", "help": "Mana to cast an uncommon card.", "default": 2, "min": 0, "max": 20},
+    "FANTASY_COST_RARE": {"label": "Arena: rare card cost", "help": "Mana to cast a rare card.", "default": 3, "min": 0, "max": 20},
+    "FANTASY_COST_EPIC": {"label": "Arena: epic card cost", "help": "Mana to cast an epic card.", "default": 4, "min": 0, "max": 20},
     # --- shop / Stars ------------------------------------------------------
     "COINS_PER_STAR": {
         "label": "Coins per Telegram Star",

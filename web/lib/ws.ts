@@ -27,7 +27,48 @@ export interface GameState {
     second_chance?: Record<string, number>;
     toll?: Record<string, number>;
     vertigo?: Record<string, number>;
+    hex?: Record<string, number>;
   };
+}
+
+export interface FantasyHandCard {
+  id: string;
+  effect: string;
+  cost: number;
+  targeted: boolean;
+  castable: boolean;
+}
+
+export interface FantasyDraft {
+  round: number;
+  rounds: number;
+  options: string[];
+  picked: boolean;
+  waiting: number[];
+}
+
+export interface FantasyEvent {
+  id: string;
+  name: string;
+  icon: string;
+  blurb: string;
+  turns_left: number;
+}
+
+export interface FantasyView {
+  mana_max: number;
+  hand_max: number;
+  mana: Record<string, number>;
+  hand_counts: Record<string, number>;
+  hand: FantasyHandCard[];
+  champion: Record<string, string | null>;
+  casts: Record<string, number>;
+  cast_log: Record<string, number>;
+  event: FantasyEvent | null;
+  next_event_turn: number;
+  cast_this_turn: [number, number] | null;
+  time_warp: number | null;
+  draft: FantasyDraft | null;
 }
 
 export interface CardBoostOption {
@@ -64,6 +105,8 @@ export interface LegalMove {
 export interface StatePayload {
   type: "state";
   code: string;
+  mode?: string;
+  fantasy?: FantasyView | null;
   state: GameState;
   seat_user: Record<string, number | null>;
   seat_names: Record<string, string>;
@@ -191,6 +234,12 @@ export class MatchSocket {
   }
   pickTarget(seat: number, token?: number): void {
     this.send(token == null ? { type: "pick_target", seat } : { type: "pick_target", seat, token });
+  }
+  castCard(cardId: string, seat?: number, token?: number): void {
+    const msg: Record<string, unknown> = { type: "cast_card", card_id: cardId };
+    if (seat != null) msg.seat = seat;
+    if (token != null) msg.token = token;
+    this.send(msg);
   }
 
   close(): void {

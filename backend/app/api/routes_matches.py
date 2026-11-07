@@ -16,6 +16,7 @@ from app.database import get_session
 from app.ludo.board import Color
 from app.ludo.rules import initial_state
 from app.models import (
+    CardPlay,
     Knockout,
     Match,
     MatchJoinRequest,
@@ -29,6 +30,7 @@ from app.services import ledger
 from app.services.ledger import InsufficientFunds
 from app.models import ChatMessage as ChatRow
 from app.models import PollTemplate, Poll, PollOption, PollVote
+from app.game import fantasy
 from app.game.connection import hub
 from app.game.manager import LateJoinError, manager
 from datetime import datetime, timezone
@@ -38,6 +40,9 @@ import time
 
 from app.schemas import (
     AcceptJoinerRequest,
+    ArenaChampion,
+    ArenaFavourite,
+    ArenaInfo,
     ChatMessage,
     CreatePollRequest,
     DiceEntry,
@@ -53,6 +58,7 @@ from app.schemas import (
     ReactRequest,
     RejectJoinerRequest,
     SeatInfo,
+    SetChampionRequest,
     SetColorRequest,
     SendChatRequest,
     VoteRequest,
@@ -62,6 +68,7 @@ router = APIRouter(prefix="/api/matches", tags=["matches"])
 
 # Seat fill order matches board turn order (blue first, then clockwise).
 _COLORS = [Color.BLUE, Color.RED, Color.GREEN, Color.YELLOW]
+MODES = ("classic", "fantasy")
 
 
 async def _allowed_reactions(session: AsyncSession) -> list[str]:
@@ -131,6 +138,7 @@ def _summary(
     return MatchSummary(
         code=m.code,
         status=m.status.value,
+        mode=m.mode or "classic",
         max_players=m.max_players,
         seated=sum(1 for s in m.seats if s.user_id is not None or s.is_bot),
         is_public=m.is_public,
@@ -168,7 +176,7 @@ async def _seat_infos(session, m: Match) -> list[SeatInfo]:
             name = "Open"
         out.append(SeatInfo(
             seat_index=s.seat_index, color=s.color, name=name,
-            is_bot=s.is_bot, user_id=s.user_id,
+            is_bot=s.is_bot, user_id=s.user_id, champion=s.champion,
         ))
     return out
 
@@ -248,6 +256,9 @@ async def create_match(
 ):
     if not 2 <= body.max_players <= 4:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "max_players must be 2..4")
+    mode = (body.mode or "classic").lower()
+    if mode not in MODES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown game mode")
     if body.entry_fee and user.coins < body.entry_fee:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not enough coins for the entry fee")
 
@@ -274,6 +285,7 @@ async def create_match(
         entry_fee=body.entry_fee,
         created_by=user.id,
         status=MatchStatus.WAITING,
+        mode=mode,
     )
     session.add(match)
     await session.flush()
@@ -302,18 +314,25 @@ async def create_match(
             session.add(MatchSeat(
                 match_id=match.id, seat_index=i, color=_COLORS[i].name,
                 is_bot=True, connected=True,
+                champion=fantasy.random_champion() if mode == "fantasy" else None,
             ))
         match.status = MatchStatus.PLAYING
 
     await session.flush()
     await session.refresh(match, attribute_names=["seats"])
     if body.fill_with_bots:
-        match.state = initial_state(
-            len(match.seats),
-            seat_colors=[Color[s.color] for s in sorted(match.seats, key=lambda s: s.seat_index)],
-        ).to_dict()
+        match.state = _opening_state(match)
         await session.flush()
     return await _room_summary(session, match, user.id)
+
+
+def _opening_state(match: Match) -> dict:
+    """The serialised opening board for a room that is starting now (either mode)."""
+    ordered = sorted(match.seats, key=lambda s: s.seat_index)
+    state = initial_state(len(ordered), seat_colors=[Color[s.color] for s in ordered])
+    if (match.mode or "classic") == "fantasy":
+        fantasy.init_state(state, {s.seat_index: s.champion for s in ordered})
+    return state.to_dict()
 
 
 @router.post("/join", response_model=MatchSummary)
@@ -384,13 +403,21 @@ async def join_match(
 
 @router.get("", response_model=list[MatchSummary])
 async def list_open_matches(
+    mode: str = "classic",
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    mode = (mode or "classic").lower()
+    if mode not in MODES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown game mode")
     rows = (
         await session.execute(
             select(Match)
-            .where(Match.is_public.is_(True), Match.status == MatchStatus.WAITING)
+            .where(
+                Match.is_public.is_(True),
+                Match.status == MatchStatus.WAITING,
+                Match.mode == mode,
+            )
             .order_by(Match.created_at.desc())
             .limit(30)
         )
@@ -398,12 +425,48 @@ async def list_open_matches(
     return [_summary(m, user_id=user.id) for m in rows]
 
 
-@router.get("/lobby", response_model=MatchLobby)
-async def lobby_matches(
+@router.get("/arena", response_model=ArenaInfo)
+async def arena_info(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Server-backed lobby sections, including rooms recoverable after app restart."""
+    """Fantasy Arena hub: your record, champion roster and realm events."""
+    fav = (
+        await session.execute(
+            select(CardPlay.card_id, func.count().label("n"))
+            .where(CardPlay.user_id == user.id)
+            .group_by(CardPlay.card_id)
+            .order_by(func.count().desc())
+            .limit(1)
+        )
+    ).first()
+    return ArenaInfo(
+        played=getattr(user, "fantasy_played", 0) or 0,
+        wins=getattr(user, "fantasy_wins", 0) or 0,
+        favourite=ArenaFavourite(card_id=fav[0], count=int(fav[1])) if fav else None,
+        champions=[
+            ArenaChampion(id=cid, **meta) for cid, meta in fantasy.CHAMPIONS.items()
+        ],
+        events=[
+            ArenaChampion(id=eid, **meta) for eid, meta in fantasy.EVENTS.items()
+        ],
+    )
+
+
+@router.get("/lobby", response_model=MatchLobby)
+async def lobby_matches(
+    mode: str = "classic",
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Server-backed lobby sections, including rooms recoverable after app restart.
+
+    ``mode`` picks the game: the classic lobby never lists Fantasy Arena rooms and the
+    arena hub never lists classic ones. Your own rooms are always listed.
+    """
+    mode = (mode or "classic").lower()
+    if mode not in MODES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown game mode")
     active_statuses = (MatchStatus.WAITING, MatchStatus.PLAYING)
     seated_ids = select(MatchSeat.match_id).where(MatchSeat.user_id == user.id)
     requested_ids = select(MatchJoinRequest.match_id).where(
@@ -415,6 +478,7 @@ async def lobby_matches(
             select(Match)
             .where(
                 Match.status.in_(active_statuses),
+                Match.mode == mode,
                 Match.id.in_(seated_ids.union(requested_ids)),
             )
             .order_by(Match.updated_at.desc())
@@ -426,6 +490,7 @@ async def lobby_matches(
             .where(
                 Match.is_public.is_(True),
                 Match.is_bot_table.is_(False),
+                Match.mode == mode,
                 Match.status == MatchStatus.WAITING,
             )
             .order_by(Match.created_at.desc())
@@ -438,6 +503,7 @@ async def lobby_matches(
             .where(
                 Match.is_public.is_(True),
                 Match.is_bot_table.is_(False),
+                Match.mode == mode,
                 Match.status == MatchStatus.PLAYING,
             )
             .order_by(Match.updated_at.desc())
@@ -691,6 +757,32 @@ async def set_color(
     return await _room_summary(session, match, user.id)
 
 
+@router.post("/{code}/champion", response_model=MatchSummary)
+async def set_champion(
+    code: str,
+    body: SetChampionRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Fantasy Arena: pick your own champion while the room is still waiting."""
+    match = await _load_room(session, code)
+    if (match.mode or "classic") != "fantasy":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Champions are a Fantasy Arena feature")
+    if match.status is not MatchStatus.WAITING:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Game already started")
+    champ = (body.champion or "").lower()
+    if champ not in fantasy.CHAMPIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown champion")
+    seat = next((s for s in match.seats if s.user_id == user.id), None)
+    if seat is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "You are not seated here")
+    seat.champion = champ
+    await session.flush()
+    await session.refresh(match, attribute_names=["seats"])
+    await hub.broadcast(match.code, {"type": "join_requests"})
+    return await _room_summary(session, match, user.id)
+
+
 @router.post("/{code}/start", response_model=MatchSummary)
 async def start_match(
     code: str,
@@ -708,10 +800,13 @@ async def start_match(
     seated = sum(1 for s in match.seats if s.user_id is not None or s.is_bot)
     if seated < 2:
         raise HTTPException(status.HTTP_409_CONFLICT, "Need at least 2 players to start")
-    ordered = sorted(match.seats, key=lambda s: s.seat_index)
-    match.state = initial_state(
-        len(ordered), seat_colors=[Color[s.color] for s in ordered]
-    ).to_dict()
+    if (match.mode or "classic") == "fantasy":
+        # every seat enters the arena with a champion; undecided players get a random one
+        for s in match.seats:
+            if (s.user_id is not None or s.is_bot) and not s.champion:
+                s.champion = fantasy.random_champion()
+        await session.flush()
+    match.state = _opening_state(match)
     match.status = MatchStatus.PLAYING
     _DICE.pop(match.code, None)
     await session.flush()

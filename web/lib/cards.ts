@@ -11,6 +11,8 @@ export interface Card {
   effect: string;
   status: "live" | "soon" | string;
   description: string;
+  cost?: number;
+  fantasy_only?: boolean;
 }
 
 // per-rarity accent colour for the card front

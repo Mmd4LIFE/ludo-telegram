@@ -60,6 +60,8 @@ export interface Profile {
   level_progress?: LevelProgress;
   xp_today?: number;
   xp_daily_cap?: number;
+  fantasy_played?: number;
+  fantasy_wins?: number;
 }
 
 export interface LevelProgress {
@@ -112,6 +114,7 @@ export interface SeatInfo {
   name: string;
   is_bot: boolean;
   user_id: number | null;
+  champion?: string | null;
 }
 
 export interface PendingJoiner {
@@ -123,6 +126,7 @@ export interface PendingJoiner {
 export interface MatchSummary {
   code: string;
   status: string;
+  mode?: string;
   max_players: number;
   seated: number;
   is_public: boolean;
@@ -142,6 +146,21 @@ export interface MatchLobby {
   mine: MatchSummary[];
   waiting: MatchSummary[];
   playing: MatchSummary[];
+}
+
+export interface ArenaChampion {
+  id: string;
+  name: string;
+  icon: string;
+  blurb: string;
+}
+
+export interface ArenaInfo {
+  played: number;
+  wins: number;
+  favourite: { card_id: string; count: number } | null;
+  champions: ArenaChampion[];
+  events: ArenaChampion[];
 }
 
 export interface PollOption {
@@ -468,13 +487,16 @@ export const api = {
   diceSkinCatalog: () =>
     req<{ id: string; price: number }[]>("GET", "/api/profile/dice-skins"),
   listMatches: () => req<MatchSummary[]>("GET", "/api/matches"),
-  listLobby: () => req<MatchLobby>("GET", "/api/matches/lobby"),
+  listLobby: (mode = "classic") =>
+    req<MatchLobby>("GET", `/api/matches/lobby?mode=${encodeURIComponent(mode)}`),
+  getArena: () => req<ArenaInfo>("GET", "/api/matches/arena"),
   getMatch: (code: string) => req<MatchSummary>("GET", `/api/matches/${code}`),
   createMatch: (opts: {
     max_players?: number;
     is_public?: boolean;
     entry_fee?: number;
     fill_with_bots?: boolean;
+    mode?: string;
   }) => req<MatchSummary>("POST", "/api/matches", opts),
   joinMatch: (code: string) =>
     req<MatchSummary>("POST", "/api/matches/join", { code }),
@@ -486,6 +508,8 @@ export const api = {
     req<MatchSummary>("POST", `/api/matches/${code}/withdraw`),
   setColor: (code: string, user_id: number, color: string) =>
     req<MatchSummary>("POST", `/api/matches/${code}/color`, { user_id, color }),
+  setChampion: (code: string, champion: string) =>
+    req<MatchSummary>("POST", `/api/matches/${code}/champion`, { champion }),
   startMatch: (code: string) => req<MatchSummary>("POST", `/api/matches/${code}/start`),
   deleteMatch: (code: string) => req<{ ok: boolean }>("DELETE", `/api/matches/${code}`),
   getDice: (code: string) => req<DiceState>("GET", `/api/matches/${code}/dice`),

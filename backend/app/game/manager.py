@@ -157,6 +157,12 @@ class MatchManager:
         color = Color[color_name_upper]
         new_state = live.state.clone()
         new_state.players.append(PlayerState(color=color))
+        champion = None
+        if new_state.fantasy is not None:
+            from app.game import fantasy
+
+            champion = fantasy.random_champion()
+            fantasy.add_seat(new_state, free, champion)
         session.add(MatchSeat(
             match_id=m.id,
             seat_index=free,
@@ -165,6 +171,7 @@ class MatchManager:
             is_bot=False,
             connected=False,
             joined_at_turn=new_state.turn,
+            champion=champion,
         ))
         req.status = "accepted"
         req.resolved_at = datetime.now(timezone.utc)
@@ -210,12 +217,14 @@ class MatchManager:
             )
         ).scalars().all()
         old = await session.get(Match, old_match_id)
+        mode = (old.mode if old else None) or "classic"
         new = Match(
             max_players=old.max_players if old else 4,
             is_public=False,
             entry_fee=old.entry_fee if old else 0,
             is_bot_table=old.is_bot_table if old else False,
             status=MatchStatus.PLAYING,
+            mode=mode,
         )
         session.add(new)
         await session.flush()
@@ -223,7 +232,19 @@ class MatchManager:
             session.add(MatchSeat(
                 match_id=new.id, seat_index=s.seat_index, color=s.color,
                 user_id=s.user_id, is_bot=s.is_bot, connected=False,
+                champion=s.champion,
             ))
+        if mode == "fantasy":
+            # a rematch starts on a fresh arena board (fresh hands, mana and draft)
+            from app.game import fantasy
+            from app.ludo.rules import initial_state
+
+            ordered = sorted(seats, key=lambda x: x.seat_index)
+            state = initial_state(
+                len(ordered), seat_colors=[Color[x.color] for x in ordered]
+            )
+            fantasy.init_state(state, {x.seat_index: x.champion for x in ordered})
+            new.state = state.to_dict()
         await session.commit()
         await session.refresh(new, attribute_names=["seats"])
         logger.info("rematch %s created from %s", new.code, old_match_id)

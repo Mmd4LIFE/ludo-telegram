@@ -40,6 +40,9 @@ class UserProfile(BaseModel):
     # action XP earned today vs the daily cap (filled by /api/profile/me)
     xp_today: int = 0
     xp_daily_cap: int = 0
+    # Fantasy Arena record
+    fantasy_played: int = 0
+    fantasy_wins: int = 0
 
     @classmethod
     def from_user(cls, u) -> "UserProfile":
@@ -70,6 +73,8 @@ class UserProfile(BaseModel):
             dice_skin=getattr(u, "dice_skin", "classic") or "classic",
             unlocked_skins=skins,
             level_progress=progress(u.xp or 0),
+            fantasy_played=getattr(u, "fantasy_played", 0) or 0,
+            fantasy_wins=getattr(u, "fantasy_wins", 0) or 0,
         )
 
 
@@ -217,6 +222,8 @@ class PlayerStats(BaseModel):
     captures_taken: int         # times this player was knocked home
     potential_knocks: int       # captures this player could have made but didn't
     level_progress: dict = {}
+    fantasy_played: int = 0
+    fantasy_wins: int = 0
 
     @classmethod
     def from_user(cls, u) -> "PlayerStats":
@@ -237,6 +244,8 @@ class PlayerStats(BaseModel):
             captures_taken=u.captures_taken or 0,
             potential_knocks=u.potential_knocks or 0,
             level_progress=progress(u.xp or 0),
+            fantasy_played=getattr(u, "fantasy_played", 0) or 0,
+            fantasy_wins=getattr(u, "fantasy_wins", 0) or 0,
         )
 
 
@@ -250,12 +259,16 @@ class CardOut(BaseModel):
     effect: str
     status: str          # "live" | "soon"
     description: str
+    cost: int = 1                 # Fantasy Arena mana cost
+    fantasy_only: bool = False    # never drawn in classic
 
     @classmethod
     def from_row(cls, c) -> "CardOut":
         return cls(
             id=c.id, name=c.name, icon=c.icon, rarity=c.rarity,
             effect=c.effect, status=c.status, description=c.description,
+            cost=getattr(c, "cost", 1) or 1,
+            fantasy_only=bool(getattr(c, "fantasy_only", False)),
         )
 
 
@@ -289,6 +302,7 @@ class CreateMatchRequest(BaseModel):
     is_public: bool = True
     entry_fee: int = 0
     fill_with_bots: bool = False  # start immediately against house bots
+    mode: str = "classic"         # "classic" | "fantasy" (Fantasy Arena)
 
 
 class SeatInfo(BaseModel):
@@ -297,6 +311,7 @@ class SeatInfo(BaseModel):
     name: str            # display name (friends-only detail stays server-side)
     is_bot: bool
     user_id: int | None = None
+    champion: str | None = None   # Fantasy Arena champion id
 
 
 class PendingJoiner(BaseModel):
@@ -308,6 +323,7 @@ class PendingJoiner(BaseModel):
 class MatchSummary(BaseModel):
     code: str
     status: str
+    mode: str = "classic"
     max_players: int
     seated: int
     is_public: bool
@@ -329,6 +345,28 @@ class MatchLobby(BaseModel):
     playing: list[MatchSummary] = []
 
 
+class ArenaChampion(BaseModel):
+    id: str
+    name: str
+    icon: str
+    blurb: str
+
+
+class ArenaFavourite(BaseModel):
+    card_id: str
+    count: int
+
+
+class ArenaInfo(BaseModel):
+    """Fantasy Arena hub payload: record, roster, realm events."""
+
+    played: int = 0
+    wins: int = 0
+    favourite: ArenaFavourite | None = None
+    champions: list[ArenaChampion] = []
+    events: list[ArenaChampion] = []
+
+
 class AcceptJoinerRequest(BaseModel):
     user_id: int
     color: str        # RED | GREEN | YELLOW | BLUE
@@ -341,6 +379,10 @@ class RejectJoinerRequest(BaseModel):
 class SetColorRequest(BaseModel):
     user_id: int     # seated player to recolour (the host may recolour themselves)
     color: str       # RED | GREEN | YELLOW | BLUE
+
+
+class SetChampionRequest(BaseModel):
+    champion: str    # knight | rogue | sage | trickster (own seat, fantasy rooms)
 
 
 class JoinMatchRequest(BaseModel):

@@ -51,6 +51,9 @@ import {
   Layers3,
   ChevronDown,
   BarChart2,
+  Wand2,
+  Ghost,
+  Hourglass,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -89,12 +92,21 @@ import {
   shareRoom,
   startParam,
 } from "@/lib/telegram";
-import { GameState, LegalMove, MatchSocket, StatePayload, CardDraw } from "@/lib/ws";
+import { GameState, LegalMove, MatchSocket, StatePayload, CardDraw, FantasyView } from "@/lib/ws";
 import { Card as CardDef, rarityColor } from "@/lib/cards";
 import { Button } from "@/components/ui/button";
 import { Card, SectionLabel } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import Board from "@/components/board";
+import {
+  ChampionPicker,
+  DraftOverlay,
+  FantasyHub,
+  HandTray,
+  ManaOrbs,
+  RealmBanner,
+  mostCast,
+} from "@/components/fantasy";
 import { InsightsPanel, SqlPanel } from "@/components/admin-insights";
 import { DICE_SKINS, PIPS, skinOf } from "@/lib/skins";
 
@@ -128,6 +140,7 @@ const XP_LABELS: Record<string, string> = {
   home: "Pieces home",
   card: "Cards played",
   couldve: "Passed knocks",
+  cast: "Cards cast",
 };
 
 function levelPct(p?: LevelProgress): number {
@@ -259,6 +272,7 @@ function Home() {
   const [busy, setBusy] = useState(false);
 
   const [view, setView] = useState<Tab>("home");
+  const [arenaHub, setArenaHub] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [room, setRoom] = useState<Room | null>(null); // waiting room
   const [matchCode, setMatchCode] = useState<string>(""); // live match
@@ -271,6 +285,8 @@ function Home() {
   const [seatDice, setSeatDice] = useState<Record<string, number>>({});
   const [gameStats, setGameStats] = useState<GameStats>({ rolls: {}, dealt: {}, taken: {}, potential: {} });
   const [cardDraw, setCardDraw] = useState<CardDraw | null>(null);
+  const [fantasy, setFantasy] = useState<FantasyView | null>(null);
+  const [matchMode, setMatchMode] = useState<"classic" | "fantasy">("classic");
   const [removedSeats, setRemovedSeats] = useState<number[]>([]);
   const [clock, setClock] = useState<Clock | null>(null);
   const [canReroll, setCanReroll] = useState(false);
@@ -307,11 +323,14 @@ function Home() {
     setRoom(null);
     setMatchCode(code);
     setState(null);
+    setFantasy(null);
     setRematch({ votes: [], humanIds: [] });
     const sock = new MatchSocket(code, (msg) => {
       if (msg.type === "state") {
         const p = msg as StatePayload;
         setState(p.state);
+        setMatchMode(p.mode === "fantasy" ? "fantasy" : "classic");
+        setFantasy(p.fantasy ?? null);
         setLegal(p.legal_moves);
         setSeatUser(p.seat_user);
         setSeatNames(p.seat_names ?? {});
@@ -393,6 +412,8 @@ function Home() {
     sockRef.current = null;
     setMatchCode("");
     setState(null);
+    setFantasy(null);
+    setMatchMode("classic");
     setRoom(null);
     api.me().then(setProfile).catch(() => {});
   }, []);
@@ -440,11 +461,11 @@ function Home() {
   }, [enterMatch]);
 
   // ---- lobby actions ----
-  const playBots = async () => {
+  const playBots = async (mode: "classic" | "fantasy" = "classic") => {
     setBusy(true);
     haptic("medium");
     try {
-      const m = await api.createMatch({ max_players: 4, fill_with_bots: true });
+      const m = await api.createMatch({ max_players: 4, fill_with_bots: true, mode });
       enterMatch(m.code);
     } catch (e) {
       setError(String(e));
@@ -453,11 +474,11 @@ function Home() {
     }
   };
 
-  const createRoom = async () => {
+  const createRoom = async (mode: "classic" | "fantasy" = "classic") => {
     setBusy(true);
     haptic("medium");
     try {
-      const m = await api.createMatch({ max_players: 4 });
+      const m = await api.createMatch({ max_players: 4, mode });
       setRoom({ code: m.code, host: true });
     } catch (e) {
       setError(String(e));
@@ -538,6 +559,8 @@ function Home() {
         sock={sockRef.current}
         joinPulse={joinPulse}
         onLeave={leaveMatch}
+        mode={matchMode}
+        fantasy={fantasy}
       />
       {levelModal}
       </>
@@ -558,12 +581,23 @@ function Home() {
 
   return (
     <>
-      {view === "home" && (
+      {view === "home" && arenaHub && (
+        <FantasyHub
+          profile={profile}
+          busy={busy}
+          onBack={() => setArenaHub(false)}
+          onPlayBots={() => playBots("fantasy")}
+          onCreateRoom={() => createRoom("fantasy")}
+          onOpen={openRoom}
+        />
+      )}
+      {view === "home" && !arenaHub && (
         <Lobby
           profile={profile}
           busy={busy}
-          onPlayBots={playBots}
-          onCreateRoom={createRoom}
+          onPlayBots={() => playBots("classic")}
+          onCreateRoom={() => createRoom("classic")}
+          onArena={() => setArenaHub(true)}
           onOpen={openRoom}
         />
       )}
@@ -577,7 +611,13 @@ function Home() {
         <WalletScreen profile={profile} onProfile={setProfile} onNotice={setNotice} />
       )}
       {view === "cards" && <CardsGallery />}
-      <BottomNav view={view} onChange={setView} />
+      <BottomNav
+        view={view}
+        onChange={(t) => {
+          setArenaHub(false);
+          setView(t);
+        }}
+      />
       {noticeBanner}
       {levelModal}
     </>
@@ -664,12 +704,14 @@ function Lobby({
   busy,
   onPlayBots,
   onCreateRoom,
+  onArena,
   onOpen,
 }: {
   profile: Profile;
   busy: boolean;
   onPlayBots: () => void;
   onCreateRoom: () => void;
+  onArena: () => void;
   onOpen: (match: MatchSummary) => void;
 }) {
   const [lobby, setLobby] = useState<MatchLobby>({ mine: [], waiting: [], playing: [] });
@@ -703,6 +745,15 @@ function Lobby({
       <div className="grid grid-cols-2 gap-2.5">
         <Tile icon={Bot} title="Quick Game" hot wide disabled={busy} onClick={onPlayBots} />
         <Tile icon={Plus} title="Create Room" wide disabled={busy} onClick={onCreateRoom} />
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onArena}
+          className="col-span-2 flex flex-col items-center gap-1.5 rounded-2xl border border-[#f5d76e]/25 bg-gradient-to-br from-[#7c3aed] to-[#4c1d95] p-5 text-center transition-transform active:scale-[0.97] disabled:opacity-50"
+        >
+          <Sparkles className="size-7 text-[#f5d76e]" />
+          <span className="font-extrabold text-white">Fantasy Arena</span>
+        </button>
       </div>
 
       <RoomSection
@@ -1082,6 +1133,9 @@ function WaitingRoom({
                     YOU
                   </span>
                 )}
+                {summary?.mode === "fantasy" && s.champion && (
+                  <span className="text-xs capitalize text-muted-foreground">{s.champion}</span>
+                )}
               </div>
               {isHost && editingColor === s.user_id && s.user_id !== null && (
                 <div className="flex items-center gap-2 pl-7">
@@ -1110,6 +1164,15 @@ function WaitingRoom({
           ))}
         </div>
       </Card>
+
+      {summary?.mode === "fantasy" && iAmSeated && (
+        <ChampionPicker
+          code={room.code}
+          mine={seats.find((s) => s.user_id === profile.id)?.champion}
+          busy={busy}
+          onPicked={setSummary}
+        />
+      )}
 
       {isHost && (
         <JoinRequests
@@ -1878,6 +1941,8 @@ function LiveMatch({
   sock,
   joinPulse,
   onLeave,
+  mode = "classic",
+  fantasy = null,
 }: {
   code: string;
   state: GameState;
@@ -1904,11 +1969,17 @@ function LiveMatch({
   sock: MatchSocket | null;
   joinPulse: number;
   onLeave: () => void;
+  mode?: "classic" | "fantasy";
+  fantasy?: FantasyView | null;
 }) {
   const [profileId, setProfileId] = useState<number | null>(null);
   const [showBoard, setShowBoard] = useState(false); // in-game scoreboard sheet
   const [roomSummary, setRoomSummary] = useState<MatchSummary | null>(null);
   const [joinErr, setJoinErr] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<Record<string, CardDef>>({});
+  useEffect(() => {
+    api.getCards().then((cs) => setCatalog(Object.fromEntries(cs.map((c) => [c.id, c])))).catch(() => {});
+  }, []);
   const mySeat = (() => {
     for (const [seat, uid] of Object.entries(seatUser)) {
       if (uid === profile.id) return Number(seat);
@@ -1989,6 +2060,8 @@ function LiveMatch({
         </div>
       )}
 
+      {fantasy?.event && <RealmBanner event={fantasy.event} />}
+
       {finished && (
         /* end-of-game broadcast — winner, standings, rematch */
         <Card className="text-center lb-pop">
@@ -2006,6 +2079,11 @@ function LiveMatch({
                 <span className="w-4 text-center font-bold text-muted-foreground">{i + 1}</span>
                 <span className="size-3 shrink-0 rounded-full" style={{ background: COLOR_HEX[state.players[seat].color] }} />
                 <span className="flex-1 truncate text-left font-semibold">{nameFor(seat)}</span>
+                {fantasy && (
+                  <span className="shrink-0 text-[10px] font-bold text-violet-300">
+                    {fantasy.casts[String(seat)] ?? 0} casts
+                  </span>
+                )}
                 <span className="shrink-0 text-right text-[11px] font-bold leading-tight text-muted-foreground">
                   <span className="block text-foreground">LVL {seatLevels[String(seat)] ?? 1}</span>
                   {(gained > 0 || ups > 0) && (
@@ -2024,6 +2102,11 @@ function LiveMatch({
               capped={(gameStats.xpCapped ?? []).includes(mySeat)}
               profile={profile}
             />
+          )}
+          {fantasy && mostCast(fantasy.cast_log, catalog) && (
+            <div className="mt-2 text-xs text-muted-foreground">
+              Most cast: <span className="font-bold text-foreground">{mostCast(fantasy.cast_log, catalog)}</span>
+            </div>
           )}
           <div className="mt-4 grid grid-cols-2 gap-2">
             <Button
@@ -2077,12 +2160,26 @@ function LiveMatch({
             haptic("light");
             setProfileId(uid);
           }}
+          theme={mode === "fantasy" ? "fantasy" : "classic"}
+          fantasyHud={
+            fantasy
+              ? { mana: fantasy.mana, handCounts: fantasy.hand_counts, manaMax: fantasy.mana_max }
+              : undefined
+          }
         />
       </Card>
 
       {!finished && (
         <>
           <div className="shrink-0">
+            {fantasy && mySeat !== null && !fantasy.draft && (
+              <HandTray
+                hand={fantasy.hand}
+                catalog={catalog}
+                disabled={!myTurn || state.phase !== "roll"}
+                onCast={(h) => sock?.castCard(h.id)}
+              />
+            )}
             <RollButton
               active={myTurn && state.phase === "roll"}
               clock={clock}
@@ -2091,6 +2188,9 @@ function LiveMatch({
                 sock?.roll();
               }}
             />
+            {fantasy && mySeat !== null && (
+              <ManaOrbs current={fantasy.mana[String(mySeat)] ?? 0} max={fantasy.mana_max} />
+            )}
             {myTurn && (
               <div className="mt-2 grid grid-cols-2 gap-2">
                 {state.phase === "move" && canReroll && (
@@ -2204,6 +2304,14 @@ function LiveMatch({
           onSkipBoost={() => sock?.skipBoost()}
         />
       )}
+      {fantasy?.draft && (
+        <DraftOverlay
+          draft={fantasy.draft}
+          catalog={catalog}
+          mine={mySeat !== null}
+          onPick={(i) => sock?.pickCard(i)}
+        />
+      )}
       {profileId != null && (
         <ProfileSheet userId={profileId} onClose={() => setProfileId(null)} />
       )}
@@ -2247,6 +2355,10 @@ const CARD_ICON: Record<string, LucideIcon> = {
   toll: Ban,
   mirror: Copy,
   jackpot: Coins,
+  mana_surge: Zap,
+  pickpocket: Wand2,
+  hex: Ghost,
+  time_warp: Hourglass,
 };
 
 function CardIcon({ id, size = 20, color }: { id: string; size?: number; color?: string }) {
@@ -2329,7 +2441,12 @@ function ChanceBox({
 
   const couldve = card.reason === "couldve";
   const bought = card.reason === "bought";
-  const reasonText = bought
+  const cast = card.reason === "cast";
+  const reasonText = cast
+    ? mine
+      ? "You cast a card"
+      : `${drawerName} cast a card`
+    : bought
     ? mine
       ? "Bought with coins"
       : `${drawerName} bought a card`
@@ -2575,7 +2692,7 @@ function CardsGallery() {
       {!cards && !err && <Card className="text-center text-sm text-muted-foreground">Loading…</Card>}
       {cards && (
         <div className="flex flex-col gap-2">
-          {cards.map((c) => {
+          {cards.filter((c) => !c.fantasy_only).map((c) => {
             const rc = rarityColor(c.rarity);
             return (
               <button

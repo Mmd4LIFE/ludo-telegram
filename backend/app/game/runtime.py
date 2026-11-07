@@ -49,8 +49,11 @@ from app.ludo.bots import choose_move
 from app.ludo.rules import _captures_at
 from app.appconfig import runtime_config, TUNABLE
 from app.game import card_catalog
+from app.game import fantasy as fantasy_rules
 from app.game.connection import hub
-from app.models import Match, MatchJoinRequest, MatchStatus, DiceRoll, Knockout, CardDraw
+from app.models import (
+    Match, MatchJoinRequest, MatchStatus, DiceRoll, Knockout, CardDraw, CardPlay,
+)
 from app.services import ledger
 from app.services.coin_features import (
     boost_cost,
@@ -72,6 +75,11 @@ class MatchRuntime:
         self.max_players = match.max_players
         self.entry_fee = match.entry_fee
         self.is_bot_table = match.is_bot_table
+        # "classic" | "fantasy" — Fantasy Arena adds hands, mana, a draft and realm events
+        self.mode = getattr(match, "mode", None) or "classic"
+        # Fantasy Arena rules, bound in _run() once the config + card catalog are loaded
+        self.fantasy: fantasy_rules.FantasyRules | None = None
+        self.seat_champion: dict[int, str | None] = {}
         # seat index -> user_id (None = house bot)
         self.seat_user: dict[int, int | None] = {}
         self.seat_is_bot: dict[int, bool] = {}
@@ -88,6 +96,7 @@ class MatchRuntime:
             self.seat_names[s.seat_index] = "Bot" if s.is_bot else "Player"
             self.seat_levels[s.seat_index] = 1
             self.seat_skins[s.seat_index] = "classic"
+            self.seat_champion[s.seat_index] = getattr(s, "champion", None)
 
         self.state: GameState = (
             GameState.from_dict(match.state)
@@ -133,6 +142,7 @@ class MatchRuntime:
         self.buf_rolls: list[dict] = []
         self.buf_knocks: list[dict] = []
         self.buf_cards: list[dict] = []
+        self.buf_plays: list[dict] = []   # Fantasy Arena casts (card_plays rows)
         # the in-progress fantasy-card draw, surfaced to the client (None when idle)
         self._card: dict | None = None
         # admin-tunable config snapshot — defaults now, refreshed from the DB in _run()
@@ -246,6 +256,12 @@ class MatchRuntime:
         self.game_taken.setdefault(seat, 0)
         self.game_potential.setdefault(seat, 0)
         self.pot_reward.setdefault(seat, 0)
+        if self.fantasy is not None and self.state.fantasy is not None:
+            self.seat_champion[seat] = self.state.fantasy["champion"].get(seat)
+            # a late joiner missed the draft: hand them a starter hand of 3
+            if self.state.fantasy.get("drafted") and not self.state.fantasy["hand"].get(seat):
+                self.fantasy.draw(self.state, seat, fantasy_rules.DRAFT_ROUNDS)
+                self._persist_dirty = True
 
     # ---- helpers ----------------------------------------------------------
     @staticmethod
@@ -276,7 +292,21 @@ class MatchRuntime:
         self, seat: int, want: str | set[str], timeout: float
     ) -> dict | None:
         """Wait up to ``timeout`` for a matching action from the seat's human, else None."""
+        got = await self._drain_seats({seat}, want, timeout)
+        return got[1] if got is not None else None
+
+    async def _drain_seats(
+        self, seats: set[int], want: str | set[str], timeout: float
+    ) -> tuple[int, dict] | None:
+        """Wait up to ``timeout`` for a matching action from any of ``seats``' humans.
+
+        Returns ``(seat, msg)`` or None on timeout. Control callbacks keep running.
+        """
         wanted = {want} if isinstance(want, str) else set(want)
+        by_user = {
+            uid: seat for seat, uid in self.seat_user.items()
+            if seat in seats and uid is not None
+        }
         deadline = timeout
         try:
             while deadline > 0:
@@ -301,8 +331,8 @@ class MatchRuntime:
                         self.submit(*action_task.result())
                     continue
                 user_id, msg = action_task.result()
-                if self.seat_user.get(seat) == user_id and msg.get("type") in wanted:
-                    return msg
+                if user_id in by_user and msg.get("type") in wanted:
+                    return by_user[user_id], msg
                 # ignore stale/foreign input and keep waiting
         except asyncio.TimeoutError:
             return None
@@ -320,7 +350,11 @@ class MatchRuntime:
                 await self._load_scores()
             except Exception:  # noqa: BLE001 — a score reload must not stop the match
                 logger.exception("could not reload scores for %s", self.code)
+            if self.mode == "fantasy":
+                await self._bind_fantasy()
             await self._broadcast()
+            if self.fantasy is not None and self.state.phase is not Phase.FINISHED:
+                await self._run_draft()
             while self.state.phase is not Phase.FINISHED:
                 while await self._execute_control():
                     pass
@@ -353,7 +387,268 @@ class MatchRuntime:
             logger.exception("runtime crashed for match %s", self.code)
 
     def _has_event_buffers(self) -> bool:
-        return bool(self.buf_rolls or self.buf_knocks or self.buf_cards)
+        return bool(self.buf_rolls or self.buf_knocks or self.buf_cards or self.buf_plays)
+
+    # ---- Fantasy Arena ----------------------------------------------------
+    async def _bind_fantasy(self) -> None:
+        """Attach the arena rules (config + card catalog) and seed the state if new."""
+        cards = await card_catalog.catalog()
+        self.fantasy = fantasy_rules.FantasyRules(self.cfg, cards, self._rng)
+        if self.state.fantasy is None:
+            fantasy_rules.init_state(
+                self.state, dict(self.seat_champion), cfg=self.cfg, rng=self._rng
+            )
+            self._persist_dirty = True
+        for seat in range(len(self.state.players)):
+            if seat not in self.state.fantasy["champion"]:
+                fantasy_rules.add_seat(self.state, seat, self.seat_champion.get(seat), self._rng)
+            self.seat_champion[seat] = self.state.fantasy["champion"].get(seat)
+
+    def _viewer_seat(self, user_id: int | None) -> int | None:
+        if user_id is None:
+            return None
+        return next((s for s, u in self.seat_user.items() if u == user_id), None)
+
+    async def _run_draft(self) -> None:
+        """Opening draft: three rounds of 'pick 1 of 3' for every seat, run in parallel.
+
+        Bots pick at once; humans get CARD_PICK_SECONDS per round (random on timeout).
+        """
+        fr = self.fantasy
+        st = self.state
+        if fr is None or not fr.draft_active(st):
+            return
+        if not st.fantasy.get("draft"):
+            fr.start_draft(st)
+        loop = asyncio.get_event_loop()
+        while st.fantasy.get("draft"):
+            while await self._execute_control():
+                pass
+            if not self.is_bot_table and not self._human_watching():
+                # nobody is here to pick: pause like the main loop does
+                self._viewer_event.clear()
+                if not self._human_watching():
+                    await self._viewer_event.wait()
+                continue
+            for s in fr.draft_pending(st):
+                if self._is_bot_seat(s):
+                    fr.draft_pick(st, s, None)
+            if fr.draft_pending(st):
+                secs = float(self.cfg["CARD_PICK_SECONDS"])
+                self._deadline = time.time() + secs
+                await self._broadcast()
+                end = loop.time() + secs
+                while True:
+                    pending = fr.draft_pending(st)
+                    left = end - loop.time()
+                    if not pending or left <= 0:
+                        break
+                    got = await self._drain_seats(set(pending), {"pick_card"}, left)
+                    if got is None:
+                        break
+                    seat, msg = got
+                    try:
+                        idx = int(msg.get("index", -1))
+                    except (TypeError, ValueError):
+                        idx = -1
+                    fr.draft_pick(st, seat, idx)
+                    await self._broadcast()
+                for s in fr.draft_pending(st):
+                    fr.draft_pick(st, s, None)   # timed out: a random pick
+                self._deadline = None
+            fr.draft_advance(st)
+            self._persist_dirty = True
+            await self._broadcast()
+            if st.fantasy.get("draft"):
+                await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
+        await self._persist()
+
+    async def _fantasy_turn_start(self, seat: int) -> None:
+        """+1 mana, cadence draw, realm-event expiry/firing at the start of a new turn."""
+        fr = self.fantasy
+        if fr is None:
+            return
+        res = fr.start_of_turn(self.state, seat)
+        if res["event_ended"]:
+            await hub.broadcast(
+                self.code, {"type": "realm_event", "event": None, "ended": res["event_ended"]}
+            )
+        if res["event"]:
+            meta = fantasy_rules.EVENTS.get(res["event"], {})
+            await hub.broadcast(self.code, {
+                "type": "realm_event", "event": res["event"],
+                "name": meta.get("name", res["event"]), "icon": meta.get("icon", ""),
+                "blurb": meta.get("blurb", ""), "turns": fr.event_turns_left(self.state),
+            })
+            self._persist_dirty = True
+        if res["drew"]:
+            self._persist_dirty = True
+
+    def _fantasy_captured(self, seat: int, count: int = 1) -> None:
+        if self.fantasy is not None and count > 0:
+            self.fantasy.on_capture(self.state, seat, count)
+
+    async def _fantasy_draw(self, seat: int, reason: str) -> None:
+        """Fantasy Arena: a classic card reward (home / could've / bought) joins the hand."""
+        fr = self.fantasy
+        if fr is None:
+            return
+        drawn = fr.draw(self.state, seat, 1)
+        if not drawn:
+            return
+        self._persist_dirty = True
+        await hub.broadcast(
+            self.code, {"type": "card_drawn", "seat": seat, "reason": reason}
+        )
+        await self._broadcast()
+
+    async def _try_cast(self, seat: int, msg: dict) -> bool:
+        """A human asked to cast ``msg['card_id']`` (optionally with a chosen target)."""
+        fr = self.fantasy
+        if fr is None:
+            return False
+        card_id = str(msg.get("card_id") or "")
+        reason = fr.can_cast(self.state, seat, card_id)
+        uid = self._human_uid(seat)
+        if reason is not None:
+            if uid is not None:
+                await hub.broadcast(
+                    self.code, {"type": "error", "code": f"cast_{reason}", "user_id": uid}
+                )
+            return False
+        target: int | None = None
+        token: int | None = None
+        for key in ("seat", "token"):
+            try:
+                val = int(msg[key]) if msg.get(key) is not None else None
+            except (TypeError, ValueError):
+                val = None
+            if key == "seat":
+                target = val
+            else:
+                token = val
+        return await self._cast(seat, card_id, target, token)
+
+    async def _cast(
+        self, seat: int, card_id: str, target: int | None, token: int | None
+    ) -> bool:
+        """Resolve a cast: choose/validate the target, pay mana, apply, log."""
+        fr = self.fantasy
+        st = self.state
+        effect = fr.effect_of(card_id)
+        if effect is None:
+            return False
+        uid = self._human_uid(seat)
+        secs = float(self.cfg["CARD_PICK_SECONDS"])
+        kicked: int | None = None
+
+        if effect == "direct_kick":
+            kickable = self._kickable_tokens(seat)
+            if not kickable:
+                return await self._cast_blocked(uid)
+            if [target, token] not in kickable:
+                if uid is not None:
+                    self._card = {
+                        "seat": seat, "stage": "target", "options": [card_id],
+                        "picked": 0, "tokens": kickable, "reason": "cast",
+                    }
+                    self._deadline = time.time() + secs
+                    await self._broadcast()
+                    got = await self._drain_for(seat, "pick_target", secs)
+                    self._deadline = None
+                    self._card = None
+                    try:
+                        target = int(got.get("seat")) if got else None
+                        token = int(got.get("token")) if got else None
+                    except (TypeError, ValueError):
+                        target, token = None, None
+                if [target, token] not in kickable:
+                    target, token = self._default_kick(kickable)
+            kicked = token
+        else:
+            targets = (
+                fr.valid_targets(st, seat, effect)
+                if effect in fantasy_rules.ARENA_EFFECTS
+                else self._valid_targets(seat, effect)
+            )
+            if targets is not None:
+                if not targets:
+                    return await self._cast_blocked(uid)
+                if len(targets) == 1:
+                    target = targets[0]
+                elif target not in targets:
+                    if uid is not None:
+                        self._card = {
+                            "seat": seat, "stage": "target", "options": [card_id],
+                            "picked": 0, "targets": targets, "reason": "cast",
+                        }
+                        self._deadline = time.time() + secs
+                        await self._broadcast()
+                        got = await self._drain_for(seat, "pick_target", secs)
+                        self._deadline = None
+                        self._card = None
+                        try:
+                            target = int(got.get("seat")) if got else None
+                        except (TypeError, ValueError):
+                            target = None
+                    if target not in targets:
+                        target = self._leading_among(seat, targets)
+            else:
+                target = None
+
+        # the window may have moved on while a human was picking a target
+        if fr.can_cast(st, seat, card_id) is not None:
+            return False
+        cost = fr.pay(st, seat, card_id)
+        self._card = {
+            "seat": seat, "stage": "result", "options": [card_id], "picked": 0,
+            "target": target, "reason": "cast", "cost": cost,
+        }
+        await self._broadcast()
+        await asyncio.sleep(settings.CARD_RESULT_DELAY)
+
+        if effect in fantasy_rules.ARENA_EFFECTS:
+            affected = fr.apply_arena_effect(st, seat, effect, target)
+        else:
+            affected = self._apply_card(seat, effect, target, {}, kicked)
+            if effect in ("shield", "shield_all"):
+                st.add_eff("shield", seat, fr.shield_bonus(st, seat))   # Knight
+        if uid is not None:
+            self._note_xp(uid, "cast")
+        self.buf_plays.append({
+            "match_id": self.match_id, "user_id": uid, "seat": seat,
+            "card_id": card_id, "cost": cost, "turn": st.turn,
+            "target_seat": affected if affected is not None else target,
+        })
+        self._persist_dirty = True
+        if affected is not None and affected != target:
+            self._card = {**self._card, "target": affected}
+        await hub.broadcast(self.code, {
+            "type": "cast", "seat": seat, "card_id": card_id, "effect": effect,
+            "target": affected if affected is not None else target, "cost": cost,
+        })
+        await self._broadcast()
+        await asyncio.sleep(settings.CARD_REVEAL_SECONDS)
+        self._card = None
+        await self._broadcast()
+        return True
+
+    async def _cast_blocked(self, uid: int | None) -> bool:
+        if uid is not None:
+            await hub.broadcast(
+                self.code, {"type": "error", "code": "cast_no_target", "user_id": uid}
+            )
+        return False
+
+    async def _bot_cast(self, seat: int) -> None:
+        fr = self.fantasy
+        if fr is None:
+            return
+        pick = fr.bot_pick_cast(self.state, seat)
+        if pick is None:
+            return
+        await self._think()
+        await self._cast(seat, pick, None, None)
 
     async def _wait_move_or_reroll(self, seat: int):
         """Accept move / reroll / insurance / hint during the move window."""
@@ -561,7 +856,10 @@ class MatchRuntime:
         if self._steps_since_persist >= n:
             return True
         # keep event inserts from growing unbounded between flushes
-        if len(self.buf_rolls) + len(self.buf_knocks) + len(self.buf_cards) >= 24:
+        buffered = (
+            len(self.buf_rolls) + len(self.buf_knocks) + len(self.buf_cards) + len(self.buf_plays)
+        )
+        if buffered >= 24:
             return True
         return False
 
@@ -575,6 +873,8 @@ class MatchRuntime:
 
         if self.state.phase is Phase.ROLL:
             self._hint_token = None
+            if self.fantasy is not None:
+                await self._fantasy_turn_start(seat)
             if not bot_seat:
                 self._deadline = time.time() + self.cfg["TURN_TIMEOUT_SECONDS"]
                 await self._broadcast()  # push the countdown to the client
@@ -583,13 +883,14 @@ class MatchRuntime:
                 loop = asyncio.get_event_loop()
                 end = loop.time() + remaining
                 got = None
+                wanted = {"roll", "buy_card", "insurance"}
+                if self.fantasy is not None:
+                    wanted.add("cast_card")
                 while True:
                     left = end - loop.time()
                     if left <= 0:
                         break
-                    got = await self._drain_for(
-                        seat, {"roll", "buy_card", "insurance"}, left
-                    )
+                    got = await self._drain_for(seat, wanted, left)
                     if got is None:
                         break
                     if got.get("type") == "buy_card" and uid is not None:
@@ -599,6 +900,13 @@ class MatchRuntime:
                         continue
                     if got.get("type") == "insurance" and uid is not None:
                         await self._try_insurance(uid)
+                        await self._broadcast()
+                        continue
+                    if got.get("type") == "cast_card":
+                        await self._try_cast(seat, got)
+                        if self.state.phase is not Phase.ROLL or self.state.current != seat:
+                            return   # the cast changed the turn (e.g. a frozen rival)
+                        self._deadline = end
                         await self._broadcast()
                         continue
                     break
@@ -614,8 +922,18 @@ class MatchRuntime:
                 else:
                     self.seat_missed[seat] = 0
             else:
+                if self.fantasy is not None:
+                    await self._bot_cast(seat)
+                    if self.state.phase is not Phase.ROLL or self.state.current != seat:
+                        return
                 await self._think()
-            register_roll(self.state, roll_die(self._rng))
+            face = roll_die(self._rng)
+            if self.fantasy is not None:
+                face = self.fantasy.adjust_roll(self.state, seat, face)   # Hex
+            register_roll(self.state, face)
+            # Arena: a six always draws a card (even a forfeited triple-six)
+            if self.fantasy is not None and self.state.roll_face == 6:
+                self.fantasy.draw(self.state, seat, 1)
             # Twin Dice: multiply MOVEMENT (face/six logic keep the real face)
             if self.state.eff("double", seat) > 0 and self.state.roll_face is not None:
                 mult = self.state.eff("double_mult", seat) or 2
@@ -704,12 +1022,19 @@ class MatchRuntime:
                     couldve_due = True
             if res.reached_home and mover is not None:
                 self._note_xp(mover, "home")
+            if self.fantasy is not None:
+                # arena mana: +1 per capture (Rogue +2), +2 per piece home
+                self._fantasy_captured(seat, len(res.captured))
+                if res.reached_home:
+                    self.fantasy.on_home(self.state, seat)
             await self._broadcast()
             await asyncio.sleep(settings.MOVE_SETTLE_SECONDS)  # let the glide finish
 
             # Bringing a token home earns a fantasy-card draw (humans only) — the reward
             # that replaced the old "reach home = extra roll". No draw once the game is over.
-            if res.reached_home and mover is not None and self.state.phase is not Phase.FINISHED:
+            # In the arena every seat (bots too) gets the card into its hand instead.
+            drawer_ok = mover is not None or self.fantasy is not None
+            if res.reached_home and drawer_ok and self.state.phase is not Phase.FINISHED:
                 if self.state.players[seat].all_home():
                     # this was their LAST token — they're done, so a self-buff is wasted.
                     # Only offer disruptive cards (that hit rivals); skip if none apply.
@@ -721,14 +1046,26 @@ class MatchRuntime:
             if couldve_due and self.state.phase is not Phase.FINISHED:
                 await self._draw_card(seat, turn_no, reason="couldve")
 
+            # Time Warp: the caster takes the next turn as well
+            if (
+                self.fantasy is not None
+                and self.fantasy.consume_time_warp(self.state, seat)
+            ):
+                self._grant_turn(seat)
+                await self._broadcast()
+
     async def _draw_card(
         self, seat: int, turn_no: int, pool: frozenset[str] | None = None, reason: str = "home"
     ) -> None:
         """Offer four cards; optional peek/boost spend; then target + apply."""
+        if self.fantasy is not None:
+            # Fantasy Arena: rewards join the hand (bots included); casting is separate
+            await self._fantasy_draw(seat, reason)
+            return
         uid = self._human_uid(seat)
         if uid is None:
             return
-        effects = await card_catalog.enabled_effects()
+        effects = await card_catalog.enabled_effects(self.mode)
         ids = [cid for cid in effects if pool is None or effects[cid] in pool]
         if len(ids) < 4:
             return
@@ -1037,6 +1374,7 @@ class MatchRuntime:
             return
         tokens[token] = BASE
         self.game_dealt[seat] = self.game_dealt.get(seat, 0) + 1
+        self._fantasy_captured(seat)
         mover = self._human_uid(seat)
         if mover is not None:
             self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + 1
@@ -1084,6 +1422,7 @@ class MatchRuntime:
                 continue
             self.state.players[vseat].tokens[vtok] = BASE
             self.game_dealt[seat] = self.game_dealt.get(seat, 0) + 1
+            self._fantasy_captured(seat)
             mover = self._human_uid(seat)
             if mover is not None:
                 self.stat_dealt[mover] = self.stat_dealt.get(mover, 0) + 1
@@ -1156,11 +1495,24 @@ class MatchRuntime:
         await asyncio.sleep(self._rng.uniform(settings.BOT_THINK_MIN, settings.BOT_THINK_MAX))
 
     # ---- rendering / persistence -----------------------------------------
-    def render(self, _user_id: int | None = None) -> dict:
+    def render(self, user_id: int | None = None) -> dict:
+        state = self.state.to_dict()
+        fantasy_view = None
+        if self.fantasy is not None and self.state.fantasy is not None:
+            # hands are private: strip them from the raw state, expose a per-viewer view
+            state["fantasy"] = {
+                k: v for k, v in state["fantasy"].items()
+                if k not in ("hand", "draft_options")
+            }
+            fantasy_view = self.fantasy.view(self.state, self._viewer_seat(user_id))
+        elif state.get("fantasy"):
+            state["fantasy"] = None
         return {
             "type": "state",
             "code": self.code,
-            "state": self.state.to_dict(),
+            "mode": self.mode,
+            "fantasy": fantasy_view,
+            "state": state,
             "seat_user": {str(k): v for k, v in self.seat_user.items()},
             "seat_names": {str(k): v for k, v in self.seat_names.items()},
             "seat_levels": {str(k): v for k, v in self.seat_levels.items()},
@@ -1207,7 +1559,11 @@ class MatchRuntime:
             "hint_token": self._hint_token,
             "can_insurance": self.state.phase in (Phase.ROLL, Phase.MOVE),
             "can_hint": self.state.phase is Phase.MOVE and self._hint_token is None,
-            "can_buy_card": self._card is None and self.state.phase is not Phase.FINISHED,
+            "can_buy_card": (
+                self._card is None
+                and self.state.phase is not Phase.FINISHED
+                and not (self.state.fantasy and self.state.fantasy.get("draft"))
+            ),
         }
 
     async def _broadcast(self) -> None:
@@ -1237,6 +1593,9 @@ class MatchRuntime:
             if self.buf_cards:
                 await session.execute(insert(CardDraw), self.buf_cards)
                 self.buf_cards = []
+            if self.buf_plays:
+                await session.execute(insert(CardPlay), self.buf_plays)
+                self.buf_plays = []
             if roll_objs or knock_objs:
                 await session.flush()
                 analytics.queue_rolls(session, roll_objs)
@@ -1317,7 +1676,10 @@ class MatchRuntime:
             return None, votes, human_ids
 
     # ---- XP / levels ------------------------------------------------------
-    _XP_KEYS = {"knock": "XP_KNOCK", "home": "XP_HOME", "card": "XP_CARD", "couldve": "XP_COULDVE"}
+    _XP_KEYS = {
+        "knock": "XP_KNOCK", "home": "XP_HOME", "card": "XP_CARD",
+        "couldve": "XP_COULDVE", "cast": "XP_CAST",
+    }
 
     def _note_xp(self, uid: int | None, kind: str, times: int = 1) -> None:
         """Queue action XP for a human; awarded (capped) on the next persist."""
@@ -1484,6 +1846,10 @@ class MatchRuntime:
                 if user is None:
                     continue
                 user.games_played += 1
+                if self.mode == "fantasy":
+                    user.fantasy_played = (user.fantasy_played or 0) + 1
+                    if place == 1:
+                        user.fantasy_wins = (user.fantasy_wins or 0) + 1
                 if uid not in self.kicked and seat not in self.removed_seats:
                     gain = self.placement_xp(place, human_count, len(self.state.ranking))
                     res = await xp_service.award(

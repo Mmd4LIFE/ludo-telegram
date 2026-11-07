@@ -52,24 +52,28 @@ class ConnectionHub:
     async def send_personalised(self, code: str, render) -> None:
         """Fan out state to a room without stalling the match driver on a slow client.
 
-        Today Ludo has no hidden per-seat fields, so we build the payload once and
-        ``gather`` the sends with a short timeout. Dead sockets are pruned afterward.
+        The payload is rendered once per distinct viewer (Fantasy Arena hides rivals'
+        hands, so the same user on two sockets shares a render) and the sends are
+        ``gather``ed with a short timeout. Dead sockets are pruned afterward.
         """
         conns = list(self._rooms.get(code, set()))
         if not conns:
             return
-        # One render for the room (personalization hook kept for future use).
-        try:
-            payload = render(conns[0][0])
-        except Exception:  # noqa: BLE001
-            logger.exception("render failed for match %s", code)
-            return
+        payloads: dict[int, dict] = {}
+        for user_id, _ in conns:
+            if user_id in payloads:
+                continue
+            try:
+                payloads[user_id] = render(user_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("render failed for match %s user %s", code, user_id)
+                return
 
         timeout = max(0.2, float(settings.WS_SEND_TIMEOUT_SECONDS))
 
         async def _send(user_id: int, ws: WebSocket) -> tuple[int, WebSocket] | None:
             try:
-                await asyncio.wait_for(ws.send_json(payload), timeout=timeout)
+                await asyncio.wait_for(ws.send_json(payloads[user_id]), timeout=timeout)
                 return None
             except Exception:  # noqa: BLE001
                 return (user_id, ws)

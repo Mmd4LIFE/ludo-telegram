@@ -148,6 +148,8 @@ export default function Board({
   onPlayerTap,
   kickTargets,
   onKick,
+  theme = "classic",
+  fantasyHud,
 }: {
   state: GameState;
   legal: LegalMove[];
@@ -165,7 +167,21 @@ export default function Board({
   onPlayerTap?: (userId: number) => void;
   kickTargets?: [number, number][];
   onKick?: (seat: number, token: number) => void;
+  theme?: "classic" | "fantasy";
+  fantasyHud?: {
+    mana: Record<string, number>;
+    handCounts: Record<string, number>;
+    manaMax: number;
+  };
 }) {
+  const arcane = theme === "fantasy";
+  const paper = arcane ? "#1a1230" : BOARD_BG;
+  const yardFill = arcane ? "#24183c" : YARD_BG;
+  const trackFill = arcane ? "#2a1d44" : "#ffffff";
+  const trackStroke = arcane ? "#4a3a6a" : "#d6d9e0";
+  const centreFill = arcane ? "#1a1230" : "#ffffff";
+  const centreStroke = arcane ? "#f5d76e" : "#ffffff";
+  const goldStar = "#f5d76e";
   const removed = new Set(removedSeats);
   const activeStars = new Set((state.active_stars ?? []).map((v) => COLOR_BY_VALUE[v]));
   const claimed = state.star_claim != null ? COLOR_BY_VALUE[state.star_claim] : null;
@@ -176,6 +192,7 @@ export default function Board({
   const frozen = seatsWith(eff.skip);
   const doubled = seatsWith(eff.double);
   const dizzy = seatsWith(eff.vertigo);
+  const hexed = seatsWith(eff.hex);
   const kickable = new Set((kickTargets ?? []).map(([seat, ti]) => `${seat}:${ti}`));
   const movable = new Set(legal.map((m) => m.token_index));
   const myTurn = mySeat !== null && state.current === mySeat && state.phase === "move";
@@ -230,7 +247,7 @@ export default function Board({
           <feGaussianBlur stdDeviation={CELL * 0.06} />
         </filter>
       </defs>
-      <rect x={0} y={0} width={SIZE} height={SIZE} rx={16} fill={BOARD_BG} />
+      <rect x={0} y={0} width={SIZE} height={SIZE} rx={16} fill={paper} />
 
       <g transform={`rotate(${rot} ${MID} ${MID})`}>
         {/* yards */}
@@ -247,7 +264,7 @@ export default function Board({
               width={(6 - 2 * YARD_INSET) * CELL}
               height={(6 - 2 * YARD_INSET) * CELL}
               rx={12}
-              fill={YARD_BG}
+              fill={yardFill}
             />
             {/* the home ring — carries the colour, and doubles as that player's clock */}
             {ticking ? (
@@ -280,8 +297,8 @@ export default function Board({
             <rect
               key={abs}
               x={c * CELL} y={r * CELL} width={CELL} height={CELL}
-              fill={START_ABS.has(abs) && startColor ? COLOR_SOFT[startColor] : "#ffffff"}
-              stroke="#d6d9e0" strokeWidth={1}
+              fill={START_ABS.has(abs) && startColor ? COLOR_SOFT[startColor] : trackFill}
+              stroke={trackStroke} strokeWidth={1}
             />
           );
         })}
@@ -302,8 +319,8 @@ export default function Board({
             <polygon
               key={`start-${abs}`}
               points={starPts(x, y, CELL * 0.28)}
-              fill={COLORS[col]}
-              opacity={0.55}
+              fill={arcane ? goldStar : COLORS[col]}
+              opacity={arcane ? 0.9 : 0.55}
               transform={`rotate(${-rot} ${x} ${y})`}
             />
           );
@@ -321,8 +338,8 @@ export default function Board({
             <polygon
               key={`neutral-${abs}`}
               points={starPts(x, y, CELL * (on ? 0.3 : 0.24))}
-              fill={on ? fill : "#cdd2db"}
-              opacity={on ? 0.95 : 0.4}
+              fill={on ? fill : arcane ? goldStar : "#cdd2db"}
+              opacity={on ? 0.95 : arcane ? 0.55 : 0.4}
               transform={`rotate(${-rot} ${x} ${y})`}
             />
           );
@@ -330,7 +347,7 @@ export default function Board({
 
         {/* centre home — four triangles meeting exactly at the board centre, with a
             clean central disc so the finish reads unmistakably as the middle */}
-        <rect x={6 * CELL} y={6 * CELL} width={3 * CELL} height={3 * CELL} fill="#ffffff" />
+        <rect x={6 * CELL} y={6 * CELL} width={3 * CELL} height={3 * CELL} fill={centreFill} />
         {(() => {
           const L = 6 * CELL, T = 6 * CELL, R = 9 * CELL, B = 9 * CELL, cx = MID, cy = MID;
           const tris: [string, string][] = [
@@ -340,7 +357,7 @@ export default function Board({
             ["RED", `${L},${B} ${L},${T} ${cx},${cy}`],
           ];
           return tris.map(([col, pts]) => (
-            <polygon key={col} points={pts} fill={COLORS[col]} stroke="#ffffff" strokeWidth={1} />
+            <polygon key={col} points={pts} fill={COLORS[col]} stroke={centreStroke} strokeWidth={1} />
           ));
         })()}
         <circle cx={MID} cy={MID} r={CELL * 0.5} fill="#ffffff" />
@@ -527,13 +544,38 @@ export default function Board({
                 <CouldveMeter x={cx + gx} y={cy + gy} R={CELL * 0.34} rot={rot} count={couldve} />
               )}
 
+              {/* arena mana + hand count, next to the die */}
+              {!gone && fantasyHud && (
+                (() => {
+                  const [mx, my] = un(dx * (r + CELL * 0.78), dy * (r + CELL * 1.55));
+                  const mana = fantasyHud.mana[String(seat)] ?? 0;
+                  const cards = fantasyHud.handCounts[String(seat)] ?? 0;
+                  return (
+                    <g transform={`rotate(${-rot} ${cx + mx} ${cy + my})`}>
+                      <text
+                        x={cx + mx}
+                        y={cy + my}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fontSize={CELL * 0.28}
+                        fontWeight={800}
+                        fill={arcane ? goldStar : "#b8860b"}
+                      >
+                        {mana}✦ {cards}🂠
+                      </text>
+                    </g>
+                  );
+                })()
+              )}
+
               {/* active fantasy-card buffs, shown as small chips below the name */}
-              {!gone && (shielded.has(seat) || frozen.has(seat) || doubled.has(seat)) && (
+              {!gone && (shielded.has(seat) || frozen.has(seat) || doubled.has(seat) || hexed.has(seat)) && (
                 (() => {
                   const chips: { t: string; c: string }[] = [];
                   if (shielded.has(seat)) chips.push({ t: "SHIELD", c: "#38bdf8" });
                   if (doubled.has(seat)) chips.push({ t: "2×", c: "#e5c07b" });
                   if (frozen.has(seat)) chips.push({ t: "FROZEN", c: "#93c5fd" });
+                  if (hexed.has(seat)) chips.push({ t: "HEX", c: "#c084fc" });
                   const [bx, by] = un(0, r + CELL * 0.92);
                   return (
                     <g transform={`rotate(${-rot} ${cx + bx} ${cy + by})`}>

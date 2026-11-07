@@ -51,6 +51,9 @@ class User(Base, TimestampMixin):
     captures_dealt: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # you knocked others home
     captures_taken: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # others knocked you home
     potential_knocks: Mapped[int] = mapped_column(Integer, default=0, server_default="0") # captures you could have made but didn't
+    # Fantasy Arena record (games_played/games_won count both modes)
+    fantasy_played: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    fantasy_wins: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     # cosmetics — which die face this player rolls with
     dice_skin: Mapped[str] = mapped_column(String(16), default="classic", server_default="classic")

@@ -161,6 +161,10 @@ def legal_moves(state: GameState, die: int | None = None) -> list[Move]:
     # (bot look-ahead passing an explicit value) fall back to that value.
     can_release = die == 6 if explicit else _can_release(state)
     blocked = set() if explicit else _blocked_squares(state, state.current_player.color)
+    # Fantasy Arena "Tailwind": every move on the board is one step longer. The release
+    # still keys off the real face, and a hypothetical die (bot look-ahead) is untouched.
+    if not explicit and state.realm_event == "tailwind":
+        die += 1
 
     player = state.current_player
     if state.eff("vertigo", state.current) > 0:
@@ -225,8 +229,13 @@ def _captures_at(state: GameState, mover: Color, dst: int) -> list[tuple[int, in
     dst_sq = absolute_square(mover, dst)
     if dst_sq is None:
         return []
+    event = state.realm_event                # Fantasy Arena realm event, if any
+    if event == "fog":
+        return []                            # Fog: nobody can be captured this round
     owner = safe_owner(dst_sq)               # start-square sanctuary colour, or None
     nstar = neutral_star_owner(dst_sq)       # neutral-star colour, or None
+    if event == "eclipse" and nstar is not None:
+        return []                            # Eclipse: every neutral star shelters everyone
     active = set(state.active_stars)         # colours whose neutral stars are live
     claim = state.star_claim                  # colour that owns every neutral star, or None
 

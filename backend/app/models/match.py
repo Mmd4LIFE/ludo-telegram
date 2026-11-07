@@ -58,6 +58,10 @@ class Match(Base, TimestampMixin):
     max_players: Mapped[int] = mapped_column(Integer, default=4)   # 2..4
     is_public: Mapped[bool] = mapped_column(Boolean, default=True)
     is_bot_table: Mapped[bool] = mapped_column(Boolean, default=False)  # self-play lobby filler
+    # "classic" | "fantasy" (Fantasy Arena: hands of cards, mana, realm events)
+    mode: Mapped[str] = mapped_column(
+        String(16), default="classic", server_default="classic", index=True
+    )
 
     entry_fee: Mapped[int] = mapped_column(Integer, default=0)     # coins staked per seat
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
@@ -87,6 +91,8 @@ class MatchSeat(Base, TimestampMixin):
     place: Mapped[int | None] = mapped_column(Integer, default=None)  # final placement 1..N
     # NULL for players present at game start; the engine turn when a late joiner entered.
     joined_at_turn: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Fantasy Arena champion id (knight/rogue/sage/trickster); NULL in classic rooms.
+    champion: Mapped[str | None] = mapped_column(String(16), default=None)
 
     match: Mapped["Match"] = relationship(back_populates="seats")
 
